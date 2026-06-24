@@ -26,7 +26,7 @@ func (h *ExportHandler) ExportPDF(w http.ResponseWriter, r *http.Request) {
 
 	subject := r.URL.Query().Get("subject")
 
-	outPath, err := h.svc.ExportPDF(r.Context(), userID, subject)
+	outPath, err := h.svc.ExportByFilter(r.Context(), userID, subject)
 	if err != nil {
 		WriteError(w, err)
 		return

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/workshop/wrong-question/internal/model"
@@ -55,6 +56,108 @@ func (r *QuestionRepo) ListByUser(ctx context.Context, userID, subject string, s
 	defer rows.Close()
 
 	return scanQuestions(rows)
+}
+
+// Search 多维搜索，仅返回 userID 归属的题目（R4）。
+func (r *QuestionRepo) Search(ctx context.Context, p model.SearchParams) ([]*model.Question, error) {
+	offset := (p.Page - 1) * p.PageSize
+	where := []string{"q.user_id = ?"}
+	args := []any{p.UserID}
+
+	if p.Subject != "" {
+		where = append(where, "q.subject = ?")
+		args = append(args, p.Subject)
+	}
+	if p.Category != "" {
+		where = append(where, "q.category = ?")
+		args = append(args, string(p.Category))
+	}
+	if p.Status != "" {
+		where = append(where, "q.status = ?")
+		args = append(args, string(p.Status))
+	}
+	if p.Keyword != "" {
+		where = append(where, "q.raw_text LIKE ?")
+		args = append(args, "%"+p.Keyword+"%")
+	}
+	if p.DateFrom != nil {
+		where = append(where, "q.created_at >= ?")
+		args = append(args, *p.DateFrom)
+	}
+	if p.DateTo != nil {
+		where = append(where, "q.created_at <= ?")
+		args = append(args, *p.DateTo)
+	}
+	if p.Tag != "" {
+		where = append(where, `EXISTS (
+			SELECT 1 FROM question_tags qt
+			WHERE qt.question_id = q.id AND qt.name = ? AND qt.status = 'confirmed'
+		)`)
+		args = append(args, p.Tag)
+	}
+
+	query := `SELECT q.id, q.user_id, q.image_path, q.raw_text, q.subject, q.source,
+	                 q.status, q.category, q.confidence, q.review_note,
+	                 q.reviewed_by, q.reviewed_at, q.created_at
+	          FROM questions q
+	          WHERE ` + strings.Join(where, " AND ") +
+		` ORDER BY q.created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, p.PageSize, offset)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("search questions: %w", err)
+	}
+	defer rows.Close()
+
+	return scanQuestionsNoTags(rows)
+}
+
+func (r *QuestionRepo) ListApprovedByUser(ctx context.Context, userID string) ([]*model.Question, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, image_path, raw_text, subject, source,
+		        status, category, confidence, review_note, reviewed_by, reviewed_at, created_at
+		 FROM questions WHERE user_id = ? AND status = 'approved'`,
+		userID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list approved questions: %w", err)
+	}
+	defer rows.Close()
+	return scanQuestionsNoTags(rows)
+}
+
+func (r *QuestionRepo) DailyNewCounts(ctx context.Context, userID string, from, to time.Time) ([]struct {
+	Date  string
+	Count int
+}, error) {
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT DATE(created_at) as d, COUNT(*) as cnt
+		 FROM questions
+		 WHERE user_id = ? AND created_at >= ? AND created_at <= ?
+		 GROUP BY d ORDER BY d`,
+		userID, from, to,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("daily new counts: %w", err)
+	}
+	defer rows.Close()
+	var result []struct {
+		Date  string
+		Count int
+	}
+	for rows.Next() {
+		var d string
+		var cnt int
+		if err := rows.Scan(&d, &cnt); err != nil {
+			return nil, err
+		}
+		result = append(result, struct {
+			Date  string
+			Count int
+		}{Date: d, Count: cnt})
+	}
+	return result, rows.Err()
 }
 
 // ListByStatus 不带 user_id 过滤，仅供教师/管理员审核使用。
@@ -114,6 +217,42 @@ func (r *QuestionRepo) Delete(ctx context.Context, id, userID string) error {
 	return nil
 }
 
+func (r *QuestionRepo) DeleteCascadeRelated(ctx context.Context, questionID string) error {
+	for _, stmt := range []string{
+		`DELETE FROM paper_questions WHERE question_id = ?`,
+		`DELETE FROM errors WHERE question_id = ?`,
+		`DELETE FROM review_records WHERE question_id = ?`,
+	} {
+		if _, err := r.db.ExecContext(ctx, stmt, questionID); err != nil {
+			return fmt.Errorf("cascade delete (%s): %w", stmt, err)
+		}
+	}
+	return nil
+}
+
+func (r *QuestionRepo) GetByIDs(ctx context.Context, userID string, ids []string) ([]*model.Question, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	args := []any{userID}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	rows, err := r.db.QueryContext(ctx,
+		`SELECT id, user_id, image_path, raw_text, subject, source,
+		        status, category, confidence, review_note, reviewed_by, reviewed_at, created_at
+		 FROM questions WHERE user_id = ? AND id IN (`+placeholders+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get questions by ids: %w", err)
+	}
+	defer rows.Close()
+	return scanQuestionsNoTags(rows)
+}
+
 func (r *QuestionRepo) UpdateCategory(ctx context.Context, id, userID string, category model.QuestionCategory) error {
 	res, err := r.db.ExecContext(ctx,
 		`UPDATE questions SET category = ? WHERE id = ? AND user_id = ?`,
@@ -150,6 +289,36 @@ func (r *QuestionRepo) UpdateReviewResult(
 		return fmt.Errorf("update review result: %w", err)
 	}
 	return nil
+}
+
+// scanQuestionsNoTags 用于搜索结果，不含 topic_tags 列（由 tag repo 单独加载）。
+func scanQuestionsNoTags(rows *sql.Rows) ([]*model.Question, error) {
+	var result []*model.Question
+	for rows.Next() {
+		q := &model.Question{}
+		var reviewedBy sql.NullString
+		var reviewedAt sql.NullTime
+		err := rows.Scan(
+			&q.ID, &q.UserID, &q.ImagePath, &q.RawText, &q.Subject, &q.Source,
+			&q.Status, &q.Category, &q.Confidence, &q.ReviewNote,
+			&reviewedBy, &reviewedAt, &q.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan question (no tags): %w", err)
+		}
+		if reviewedBy.Valid {
+			q.ReviewedBy = reviewedBy.String
+		}
+		if reviewedAt.Valid {
+			t := reviewedAt.Time
+			q.ReviewedAt = &t
+		}
+		result = append(result, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate questions: %w", err)
+	}
+	return result, nil
 }
 
 func scanQuestions(rows *sql.Rows) ([]*model.Question, error) {

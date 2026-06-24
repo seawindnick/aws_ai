@@ -2,8 +2,10 @@ package handler
 
 import (
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/workshop/wrong-question/internal/apperr"
@@ -124,6 +126,92 @@ func (h *QuestionHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// BatchUpload POST /api/questions/batch  (REQ-UPLOAD-10)
+func (h *QuestionHandler) BatchUpload(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromCtx(r.Context())
+	if !ok {
+		WriteError(w, apperr.ErrUnauthorized)
+		return
+	}
+
+	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		WriteError(w, apperr.BadRequest("invalid multipart form"))
+		return
+	}
+
+	files := r.MultipartForm.File["images"]
+	if len(files) == 0 {
+		WriteError(w, apperr.BadRequest("images field required"))
+		return
+	}
+
+	multipartFiles := make([]multipart.File, 0, len(files))
+	for _, fh := range files {
+		f, err := fh.Open()
+		if err != nil {
+			WriteError(w, apperr.BadRequest("cannot open uploaded file"))
+			return
+		}
+		defer f.Close()
+		multipartFiles = append(multipartFiles, f)
+	}
+
+	result := h.svc.BatchUpload(r.Context(), userID, multipartFiles)
+	WriteJSON(w, http.StatusMultiStatus, result)
+}
+
+// Search GET /api/questions/search  (REQ-SEARCH-01~06)
+func (h *QuestionHandler) Search(w http.ResponseWriter, r *http.Request) {
+	userID, ok := middleware.UserIDFromCtx(r.Context())
+	if !ok {
+		WriteError(w, apperr.ErrUnauthorized)
+		return
+	}
+
+	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+
+	var dateFrom, dateTo *time.Time
+	if s := q.Get("date_from"); s != "" {
+		t, err := time.Parse(time.DateOnly, s)
+		if err != nil {
+			WriteError(w, apperr.BadRequest("date_from must be YYYY-MM-DD"))
+			return
+		}
+		dateFrom = &t
+	}
+	if s := q.Get("date_to"); s != "" {
+		t, err := time.Parse(time.DateOnly, s)
+		if err != nil {
+			WriteError(w, apperr.BadRequest("date_to must be YYYY-MM-DD"))
+			return
+		}
+		dateTo = &t
+	}
+
+	params := model.SearchParams{
+		UserID:   userID,
+		Subject:  q.Get("subject"),
+		Tag:      q.Get("tag"),
+		Keyword:  q.Get("keyword"),
+		Category: model.QuestionCategory(q.Get("category")),
+		Status:   model.QuestionStatus(q.Get("status")),
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+		Page:     page,
+		PageSize: pageSize,
+	}
+
+	questions, err := h.svc.Search(r.Context(), params)
+	if err != nil {
+		WriteError(w, err)
+		return
+	}
+
+	WriteList(w, questions, len(questions))
 }
 
 func (h *QuestionHandler) UpdateCategory(w http.ResponseWriter, r *http.Request) {

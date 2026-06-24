@@ -9,16 +9,15 @@ import (
 	"github.com/workshop/wrong-question/internal/repository"
 )
 
-// ReviewQueueService 处理人工审核队列，仅教师/管理员可调用。
 type ReviewQueueService struct {
 	questionRepo *repository.QuestionRepo
+	notifSvc     *NotificationService
 }
 
-func NewReviewQueueService(questionRepo *repository.QuestionRepo) *ReviewQueueService {
-	return &ReviewQueueService{questionRepo: questionRepo}
+func NewReviewQueueService(questionRepo *repository.QuestionRepo, notifSvc *NotificationService) *ReviewQueueService {
+	return &ReviewQueueService{questionRepo: questionRepo, notifSvc: notifSvc}
 }
 
-// ListPending 列出所有待审核题目，供审核人员查阅。
 func (s *ReviewQueueService) ListPending(ctx context.Context, page, pageSize int) ([]*model.Question, error) {
 	questions, err := s.questionRepo.ListByStatus(ctx, model.QuestionStatusPendingReview, page, pageSize)
 	if err != nil {
@@ -27,8 +26,8 @@ func (s *ReviewQueueService) ListPending(ctx context.Context, page, pageSize int
 	return questions, nil
 }
 
-// Review 对单道题目执行审核操作（通过或拒绝），同时支持修正分类和备注。
-// reviewerID 必须来自鉴权 context，不得由客户端传入（R4）。
+// Review 审核题目，完成后发送站内通知（REQ-REVIEW-06）。
+// reviewerID 来自鉴权 context，不得由客户端传入（R4）。
 func (s *ReviewQueueService) Review(ctx context.Context, questionID, reviewerID string, action model.ReviewAction, category model.QuestionCategory, note string) error {
 	q, err := s.questionRepo.GetByIDNoUserFilter(ctx, questionID)
 	if err != nil {
@@ -60,6 +59,12 @@ func (s *ReviewQueueService) Review(ctx context.Context, questionID, reviewerID 
 	now := time.Now().UTC()
 	if err := s.questionRepo.UpdateReviewResult(ctx, questionID, newStatus, finalCategory, note, reviewerID, now); err != nil {
 		return fmt.Errorf("save review result: %w", err)
+	}
+
+	// 通知题目所有者（REQ-REVIEW-06）
+	if err := s.notifSvc.NotifyQuestionReviewed(ctx, q.UserID, questionID, newStatus); err != nil {
+		// 通知失败不回滚审核结果，记录错误向上传播
+		return fmt.Errorf("send review notification: %w", err)
 	}
 
 	return nil

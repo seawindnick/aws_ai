@@ -11,11 +11,12 @@ import (
 )
 
 type ReviewService struct {
-	repo *repository.ReviewRepo
+	repo      *repository.ReviewRepo
+	errorRepo *repository.ErrorRecordRepo
 }
 
-func NewReviewService(repo *repository.ReviewRepo) *ReviewService {
-	return &ReviewService{repo: repo}
+func NewReviewService(repo *repository.ReviewRepo, errorRepo *repository.ErrorRecordRepo) *ReviewService {
+	return &ReviewService{repo: repo, errorRepo: errorRepo}
 }
 
 func (s *ReviewService) TodayList(ctx context.Context, userID string) ([]*model.ReviewSchedule, error) {
@@ -27,6 +28,10 @@ func (s *ReviewService) TodayList(ctx context.Context, userID string) ([]*model.
 }
 
 func (s *ReviewService) SubmitResult(ctx context.Context, userID, questionID string, result model.ReviewResult) error {
+	if result != model.ReviewPass && result != model.ReviewFail {
+		return fmt.Errorf("invalid review result: %s", result)
+	}
+
 	rec := &model.ReviewRecord{
 		ID:         uuid.New().String(),
 		UserID:     userID,
@@ -34,31 +39,43 @@ func (s *ReviewService) SubmitResult(ctx context.Context, userID, questionID str
 		ReviewedAt: time.Now().UTC(),
 		Result:     string(result),
 	}
-
 	if err := s.repo.SaveRecord(ctx, rec); err != nil {
 		return fmt.Errorf("save review record: %w", err)
 	}
 
-	var intervalDays int
+	existing, err := s.repo.GetSchedule(ctx, userID, questionID)
+	if err != nil {
+		return fmt.Errorf("get schedule: %w", err)
+	}
+
+	var prevInterval int
+	if existing != nil {
+		prevInterval = existing.IntervalDays
+	}
+
+	var newInterval int
 	switch result {
 	case model.ReviewPass:
-		// TODO: 从 DynamoDB 查上次的 interval_days 再翻倍，首次默认为 1
-		intervalDays = 2
+		if prevInterval < 1 {
+			newInterval = 1
+		} else {
+			newInterval = prevInterval * 2
+		}
 	case model.ReviewFail:
-		intervalDays = 1
-	default:
-		return fmt.Errorf("invalid review result: %s", result)
+		newInterval = 1
+		if err := s.errorRepo.Upsert(ctx, userID, questionID); err != nil {
+			return fmt.Errorf("upsert error record: %w", err)
+		}
 	}
 
-	nextReview := time.Now().UTC().Add(time.Duration(intervalDays) * 24 * time.Hour)
+	nextReview := time.Now().UTC().Add(time.Duration(newInterval) * 24 * time.Hour)
 	schedule := &model.ReviewSchedule{
 		UserID:       userID,
-		NextReviewAt: nextReview,
 		QuestionID:   questionID,
-		IntervalDays: intervalDays,
+		NextReviewAt: nextReview,
+		IntervalDays: newInterval,
 		TTL:          nextReview.Add(30 * 24 * time.Hour).Unix(),
 	}
-
 	if err := s.repo.SaveSchedule(ctx, schedule); err != nil {
 		return fmt.Errorf("save review schedule: %w", err)
 	}

@@ -1,6 +1,6 @@
 # 错题本 — 需求文档
 
-**版本**: 1.1
+**版本**: 1.2
 **日期**: 2026-06-24
 **描述方式**: EARS（Easy Approach to Requirements Syntax）
 
@@ -151,6 +151,30 @@ While a student filters by subject, the system shall only return questions whose
 ### REQ-SEARCH-06
 The system shall allow combining multiple filters in a single search request; all filters shall be applied with AND semantics.
 
+### REQ-SEARCH-07
+The system shall provide a semantic search interface separate from the keyword search interface, allowing a student to submit a natural-language query of 1–500 characters and receive the top-5 most semantically similar questions from their own approved question library.
+
+### REQ-SEARCH-08
+When a student submits a semantic search query, the system shall vectorize the query using Amazon Bedrock Titan Text Embeddings v2 and perform a kNN similarity search against the Amazon S3 Vectors store; the system shall return each result with a similarity score in the range [0.0, 1.0].
+
+### REQ-SEARCH-09
+The system shall allow a student to optionally filter semantic search results by subject; subject filtering shall be applied before the kNN ranking step and shall use AND semantics with the vector similarity.
+
+### REQ-SEARCH-10
+When a semantic search query returns no results, the system shall return an empty list with count 0 and shall not return an error.
+
+### REQ-SEARCH-11
+When the embedding service is unavailable or returns an error, the system shall return a 502 Bad Gateway response and shall not silently fall back to keyword search.
+
+### REQ-SEARCH-12
+The system shall generate and store a vector embedding for each question asynchronously after the question reaches **approved** or **pending_review** status; questions whose embedding has not yet been generated shall be absent from semantic search results without causing an error.
+
+### REQ-SEARCH-13
+The system shall enforce that semantic search results are scoped to the authenticated student's own questions; the user_id filter shall be sourced from the session token, not from client-supplied input (REQ-SEC-01).
+
+### REQ-SEARCH-14
+When a question is deleted, the system shall remove its vector embedding from the Amazon S3 Vectors store; failure to remove the embedding shall be logged server-side and shall not block the deletion response.
+
 ---
 
 ## 六、复习试卷编排
@@ -274,7 +298,7 @@ The system shall allow a student to mark all of their notifications as read in a
 ## 十三、账号与用户管理
 
 ### REQ-ACCT-01
-The system shall allow an admin to create a user account by specifying an email address and role; the system shall generate a random initial password and return it in the creation response, displayed only once.
+The system shall allow an admin to create a user account by specifying an email address and role; the system shall generate a random initial password and return it in the creation response, displayed only once. The system shall not support self-registration; all accounts must be created by an admin. When a newly created user logs in for the first time, the system shall require them to change their initial password before accessing any other feature.
 
 ### REQ-ACCT-02
 The system shall allow an admin to import user accounts in bulk by uploading a CSV file containing email and role columns; each row shall be processed independently and the response shall list succeeded and failed rows without aborting the entire batch. A single import request shall not exceed 200 rows.
@@ -411,7 +435,7 @@ The system shall respond to all API requests (excluding PDF generation and recog
 The system shall use Go 1.25 for all backend services.
 
 ### REQ-NFR-03
-The system shall be deployed on AWS ECS Fargate with MySQL (RDS) as the primary relational store and DynamoDB for review scheduling.
+The system shall be deployed on AWS ECS Fargate with MySQL (RDS) as the primary relational store, DynamoDB for review scheduling and embedding job queuing, and Amazon S3 Vectors as the vector store for semantic search. All infrastructure shall be defined and deployed using AWS CDK.
 
 ### REQ-NFR-04
 The system shall use structured JSON logging (slog) for all server-side log output, including user_id on every log entry.

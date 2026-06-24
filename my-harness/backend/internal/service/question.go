@@ -18,20 +18,39 @@ import (
 
 type QuestionService struct {
 	repo        *repository.QuestionRepo
+	tagRepo     *repository.TagRepo
 	recognition *RecognitionService
+	embedJobs   *EmbeddingJobService
 	imageDir    string
 	cfg         *config.Config
 }
 
-func NewQuestionService(repo *repository.QuestionRepo, recognition *RecognitionService, cfg *config.Config) *QuestionService {
-	return &QuestionService{repo: repo, recognition: recognition, imageDir: cfg.ImageDir, cfg: cfg}
+func NewQuestionService(
+	repo *repository.QuestionRepo,
+	tagRepo *repository.TagRepo,
+	recognition *RecognitionService,
+	embedJobs *EmbeddingJobService,
+	cfg *config.Config,
+) *QuestionService {
+	return &QuestionService{repo: repo, tagRepo: tagRepo, recognition: recognition, embedJobs: embedJobs, imageDir: cfg.ImageDir, cfg: cfg}
 }
 
-// UploadResult 上传结果，包含题目本体和状态说明。
+// UploadResult 单张图片上传结果。
 type UploadResult struct {
 	Question      *model.Question
 	NeedsReview   bool
 	StatusMessage string
+}
+
+// BatchUploadResult 批量上传结果（REQ-UPLOAD-10）。
+type BatchUploadResult struct {
+	Succeeded []*UploadResult
+	Failed    []BatchUploadError
+}
+
+type BatchUploadError struct {
+	Index int    `json:"index"`
+	Error string `json:"error"`
 }
 
 func (s *QuestionService) Upload(ctx context.Context, userID string, file multipart.File) (*UploadResult, error) {
@@ -39,15 +58,34 @@ func (s *QuestionService) Upload(ctx context.Context, userID string, file multip
 	if err != nil {
 		return nil, fmt.Errorf("read image file: %w", err)
 	}
+	return s.uploadBytes(ctx, userID, data)
+}
 
-	// 图片边界校验（格式、大小）
+// BatchUpload 逐个处理，每张独立成功或失败（REQ-UPLOAD-10）。
+func (s *QuestionService) BatchUpload(ctx context.Context, userID string, files []multipart.File) *BatchUploadResult {
+	result := &BatchUploadResult{}
+	for i, file := range files {
+		data, err := io.ReadAll(file)
+		if err != nil {
+			result.Failed = append(result.Failed, BatchUploadError{Index: i, Error: fmt.Sprintf("read image: %s", err)})
+			continue
+		}
+		res, err := s.uploadBytes(ctx, userID, data)
+		if err != nil {
+			result.Failed = append(result.Failed, BatchUploadError{Index: i, Error: err.Error()})
+			continue
+		}
+		result.Succeeded = append(result.Succeeded, res)
+	}
+	return result
+}
+
+func (s *QuestionService) uploadBytes(ctx context.Context, userID string, data []byte) (*UploadResult, error) {
 	if err := ValidateImageBytes(data); err != nil {
 		return nil, fmt.Errorf("invalid image: %w", err)
 	}
 
 	questionID := uuid.New().String()
-
-	// 路径由服务端生成，禁止拼接用户输入（R7）
 	dir := filepath.Join(s.imageDir, userID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("create image dir: %w", err)
@@ -60,12 +98,10 @@ func (s *QuestionService) Upload(ctx context.Context, userID string, file multip
 	encoded := base64.StdEncoding.EncodeToString(data)
 	recognition, err := s.recognition.Recognize(ctx, encoded)
 	if err != nil {
-		// 识别失败不兜底（R2），删除已写入的图片，向上返回错误
 		_ = os.Remove(imagePath)
 		return nil, fmt.Errorf("recognize question: %w", err)
 	}
 
-	// 按置信度分流：高置信度自动通过，中等转人工审核，低置信度拒绝
 	status, statusMsg, err := s.classifyByConfidence(recognition.Confidence)
 	if err != nil {
 		_ = os.Remove(imagePath)
@@ -78,10 +114,9 @@ func (s *QuestionService) Upload(ctx context.Context, userID string, file multip
 		ImagePath:  imagePath,
 		RawText:    recognition.RawText,
 		Subject:    recognition.Subject,
-		TopicTags:  recognition.TopicTags,
-		Category:   recognition.Category,
 		Source:     "third_party_api",
 		Status:     status,
+		Category:   recognition.Category,
 		Confidence: recognition.Confidence,
 		CreatedAt:  time.Now().UTC(),
 	}
@@ -90,14 +125,48 @@ func (s *QuestionService) Upload(ctx context.Context, userID string, file multip
 		return nil, fmt.Errorf("save question: %w", err)
 	}
 
+	// 将识别出的 topic_tags 存为 suggested 标签
+	if len(recognition.TopicTags) > 0 {
+		if err := s.createSuggestedTags(ctx, questionID, userID, recognition.TopicTags); err != nil {
+			return nil, fmt.Errorf("save suggested tags: %w", err)
+		}
+	}
+
+	// 异步触发向量生成（写入 embedding_jobs）
+	if s.embedJobs != nil {
+		if err := s.embedJobs.Enqueue(ctx, questionID, userID); err != nil {
+			// 写入失败仅记日志，不阻断主流程
+			fmt.Printf("WARN: enqueue embedding job: %v\n", err)
+		}
+	}
+
 	return &UploadResult{
-		Question:    q,
-		NeedsReview: status == model.QuestionStatusPendingReview,
+		Question:      q,
+		NeedsReview:   status == model.QuestionStatusPendingReview,
 		StatusMessage: statusMsg,
 	}, nil
 }
 
-// classifyByConfidence 根据置信度决定题目状态，返回明确错误不静默降级（R2）。
+func (s *QuestionService) createSuggestedTags(ctx context.Context, questionID, userID string, names []string) error {
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		t := &model.Tag{
+			ID:         uuid.New().String(),
+			QuestionID: questionID,
+			UserID:     userID,
+			Name:       name,
+			Status:     model.TagStatusSuggested,
+			CreatedAt:  time.Now().UTC(),
+		}
+		if err := s.tagRepo.Create(ctx, t); err != nil {
+			return fmt.Errorf("insert suggested tag %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func (s *QuestionService) classifyByConfidence(confidence float64) (model.QuestionStatus, string, error) {
 	switch {
 	case confidence >= s.cfg.ConfidenceAutoApprove:
@@ -112,6 +181,21 @@ func (s *QuestionService) classifyByConfidence(confidence float64) (model.Questi
 			confidence, s.cfg.ConfidenceMinAccept,
 		)
 	}
+}
+
+// Search 多维搜索（REQ-SEARCH-01 ~ 06）。
+func (s *QuestionService) Search(ctx context.Context, params model.SearchParams) ([]*model.Question, error) {
+	if params.Page < 1 {
+		params.Page = 1
+	}
+	if params.PageSize < 1 || params.PageSize > 100 {
+		params.PageSize = 20
+	}
+	questions, err := s.repo.Search(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("search questions: %w", err)
+	}
+	return questions, nil
 }
 
 func (s *QuestionService) List(ctx context.Context, userID, subject string, status model.QuestionStatus, page, pageSize int) ([]*model.Question, error) {
@@ -135,16 +219,27 @@ func (s *QuestionService) Delete(ctx context.Context, id, userID string) error {
 	if err != nil {
 		return fmt.Errorf("get question for delete: %w", err)
 	}
+
+	// cascade: tags, paper_questions, error_records, review_records
+	if err := s.tagRepo.DeleteByQuestion(ctx, id); err != nil {
+		return fmt.Errorf("cascade delete tags: %w", err)
+	}
+	if err := s.repo.DeleteCascadeRelated(ctx, id); err != nil {
+		return fmt.Errorf("cascade delete related: %w", err)
+	}
+
 	if err := s.repo.Delete(ctx, id, userID); err != nil {
 		return fmt.Errorf("delete question record: %w", err)
 	}
+
+	// best-effort cleanup of image file
 	if err := os.Remove(q.ImagePath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("delete image file: %w", err)
+		fmt.Printf("WARN: delete image file %s: %v\n", q.ImagePath, err)
 	}
+
 	return nil
 }
 
-// UpdateCategory 学生手动修正题目分类。
 func (s *QuestionService) UpdateCategory(ctx context.Context, id, userID string, category model.QuestionCategory) error {
 	if !isValidCategory(category) {
 		return fmt.Errorf("invalid category: %s", category)

@@ -35,6 +35,27 @@ func (r *ReviewRepo) SaveRecord(ctx context.Context, rec *model.ReviewRecord) er
 	return nil
 }
 
+func (r *ReviewRepo) GetSchedule(ctx context.Context, userID, questionID string) (*model.ReviewSchedule, error) {
+	out, err := r.ddb.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: &r.tableName,
+		Key: map[string]types.AttributeValue{
+			"user_id":     &types.AttributeValueMemberS{Value: userID},
+			"question_id": &types.AttributeValueMemberS{Value: questionID},
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get schedule: %w", err)
+	}
+	if out.Item == nil {
+		return nil, nil
+	}
+	s := &model.ReviewSchedule{}
+	if err := attributevalue.UnmarshalMap(out.Item, s); err != nil {
+		return nil, fmt.Errorf("unmarshal schedule: %w", err)
+	}
+	return s, nil
+}
+
 func (r *ReviewRepo) SaveSchedule(ctx context.Context, s *model.ReviewSchedule) error {
 	item, err := attributevalue.MarshalMap(s)
 	if err != nil {
@@ -54,6 +75,7 @@ func (r *ReviewRepo) ListTodaySchedule(ctx context.Context, userID string) ([]*m
 	now := time.Now().UTC().Format(time.RFC3339)
 	out, err := r.ddb.Query(ctx, &dynamodb.QueryInput{
 		TableName:              &r.tableName,
+		IndexName:              aws.String("user_date_index"),
 		KeyConditionExpression: aws.String("user_id = :uid AND next_review_at <= :now"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":uid": &types.AttributeValueMemberS{Value: userID},
