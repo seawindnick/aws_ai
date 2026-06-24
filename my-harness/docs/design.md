@@ -815,3 +815,187 @@ erDiagram
 
     class_tasks ||--o{ task_submissions : "收到"
 ```
+
+---
+
+## 十六、功能模块关系图
+
+> 箭头表示依赖方向（A → B 表示 A 依赖 B 提供的能力）。
+> 实线为强依赖（核心流程必须），虚线为弱依赖（触发或通知）。
+
+```mermaid
+flowchart LR
+    subgraph 用户体系
+        AUTH[认证模块\nCognito JWT]
+        ACCT[账号管理\n管理员创建/停用]
+        ME[用户自管理\n改密码/昵称/注销]
+    end
+
+    subgraph 题目核心
+        UPLOAD[上传识别\n图片→题目]
+        TAG[标签管理\nsuggest/confirm]
+        SEARCH[搜索\n多维过滤]
+        QREVIEW[人工审核\n审核队列]
+    end
+
+    subgraph 学习闭环
+        SCHED[复习调度\nEbbinghaus]
+        EREC[错题记录\nwrong_count]
+        REC[AI 推荐\nBedrock]
+    end
+
+    subgraph 组卷导出
+        PAPER[试卷编排\n草稿/发布]
+        EXPORT[PDF 导出\ngofpdf]
+    end
+
+    subgraph 协作
+        CLASS[班级管理\n邀请码]
+        TASK[班级任务\n布置/提交]
+    end
+
+    subgraph 辅助
+        NOTIF[通知\n站内消息]
+        STATS[统计看板\n趋势/掌握率]
+    end
+
+    %% 所有模块都依赖认证
+    AUTH -.->|JWT userID| UPLOAD & TAG & SEARCH & QREVIEW
+    AUTH -.->|JWT userID| SCHED & EREC & REC & PAPER & EXPORT
+    AUTH -.->|JWT userID| CLASS & TASK & NOTIF & STATS & ME & ACCT
+
+    %% 账号管理
+    ACCT -->|调 Cognito| AUTH
+    ME -->|调 Cognito 改密码| AUTH
+
+    %% 题目核心流程
+    UPLOAD -->|置信度分级后入库| QREVIEW
+    UPLOAD -->|识别结果生成| TAG
+    QREVIEW -->|审核完成触发| NOTIF
+    TAG -->|confirmed 标签供| SEARCH
+    SEARCH -->|同一搜索条件| PAPER
+
+    %% 学习闭环
+    EREC -->|错题摘要输入| REC
+    SCHED -->|今日待复习列表| REC
+    SCHED -->|调度更新| EREC
+
+    %% 组卷导出
+    PAPER -->|只含 approved 题| EXPORT
+    PAPER -->|发布为班级任务| TASK
+
+    %% 协作
+    CLASS -->|成员资格校验| TASK
+    TASK -->|提交结果触发| SCHED
+    TASK -->|提交结果触发| EREC
+
+    %% 统计
+    SCHED -->|interval_days| STATS
+    EREC -->|wrong_count| STATS
+    UPLOAD -->|新增题目数| STATS
+```
+
+---
+
+## 十七、核心业务流程
+
+### 1. 上传识别完整流程
+
+```mermaid
+sequenceDiagram
+    participant U as 学生
+    participant H as Handler
+    participant S as QuestionService
+    participant R as 识别API
+    participant DB as MySQL
+    participant TS as TagService
+
+    U->>H: POST /api/questions (图片)
+    H->>H: 校验格式/大小 (JPEG/PNG, 1KB~10MB)
+    H->>S: Upload(userID, imageBytes)
+    S->>S: 写图片到 /data/imgs/{userID}/{uuid}.jpg
+    S->>R: 调识别API(base64图片)
+    R-->>S: {raw_text, subject, tags, confidence}
+    alt confidence >= 0.85
+        S->>DB: INSERT question (status=approved)
+    else 0.50 <= confidence < 0.85
+        S->>DB: INSERT question (status=pending_review)
+    else confidence < 0.50
+        S->>S: 删除图片文件
+        S-->>H: 返回 422 错误
+    end
+    S->>TS: CreateSuggestedTags(questionID, tags)
+    TS->>DB: INSERT question_tags (status=suggested)
+    S-->>H: UploadResult
+    H-->>U: 201/202 + question JSON
+```
+
+### 2. 人工审核 + 通知流程
+
+```mermaid
+sequenceDiagram
+    participant T as 教师
+    participant H as ReviewQueueHandler
+    participant S as ReviewQueueService
+    participant DB as MySQL
+    participant NS as NotificationService
+
+    T->>H: POST /api/review-queue/:id/review
+    H->>S: Review(questionID, reviewerID, action)
+    S->>DB: SELECT question WHERE id=? (不过滤user_id)
+    DB-->>S: question (status=pending_review)
+    S->>DB: UPDATE question SET status=approved/rejected
+    S->>NS: NotifyQuestionReviewed(question.user_id, status)
+    NS->>DB: INSERT notifications
+    S-->>H: nil
+    H-->>T: 204 No Content
+```
+
+### 3. 复习提交 + Ebbinghaus 调度
+
+```mermaid
+sequenceDiagram
+    participant U as 学生
+    participant H as ReviewHandler
+    participant S as ReviewService
+    participant DB as MySQL
+    participant DDB as DynamoDB
+
+    U->>H: POST /api/review/:id/result {result: pass/fail}
+    H->>S: SubmitResult(userID, questionID, result)
+    S->>DB: INSERT review_records
+    S->>DDB: GET schedule (PK=userID, SK=questionID)
+    DDB-->>S: {interval_days: N}
+    alt result = pass
+        S->>S: new_interval = N * 2
+    else result = fail
+        S->>S: new_interval = 1
+    end
+    S->>DDB: PUT schedule {next_review_at, interval_days, TTL}
+    S-->>H: nil
+    H-->>U: 204 No Content
+```
+
+### 4. 班级任务提交流程
+
+```mermaid
+sequenceDiagram
+    participant U as 学生
+    participant H as TaskHandler
+    participant S as TaskService
+    participant DB as MySQL
+    participant RS as ReviewService
+
+    U->>H: POST /api/classes/:id/tasks/:tid/submit
+    H->>S: Submit(taskID, userID, results[])
+    S->>DB: SELECT task (检查 status=active, due_at)
+    S->>DB: SELECT class_members (验证学生在班级)
+    loop 每道题
+        S->>DB: INSERT task_submissions (UNIQUE冲突→409)
+        S->>RS: SubmitResult(userID, questionID, result)
+        RS->>DB: INSERT review_records
+        RS->>DB: UPDATE DynamoDB schedule
+    end
+    S-->>H: {succeeded, failed}
+    H-->>U: 207 Multi-Status
+```
