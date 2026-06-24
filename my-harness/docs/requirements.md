@@ -1,7 +1,7 @@
 # 错题本 — 需求文档
 
-**版本**: 1.0  
-**日期**: 2026-06-24  
+**版本**: 1.1
+**日期**: 2026-06-24
 **描述方式**: EARS（Easy Approach to Requirements Syntax）
 
 ---
@@ -78,10 +78,10 @@ When a batch of images is uploaded, the system shall process each image independ
 ## 三、标签管理
 
 ### REQ-TAG-01
-When a question is recognized, the system shall extract candidate topic tags from the recognition API response and store them as the initial tag set for that question.
+When a question is recognized, the system shall extract candidate topic tags from the recognition API response and store them as **suggested** tags for that question.
 
 ### REQ-TAG-02
-When the recognition API cannot determine topic tags with high confidence, the system shall store the suggested tags with a **suggested** marker and present them to the student for confirmation.
+When the recognition API returns topic tags, the system shall store all returned tags with **suggested** status regardless of confidence score, and present them to the student for confirmation.
 
 ### REQ-TAG-03
 When a student views a question with **suggested** tags, the system shall display the suggested tags and allow the student to accept, reject, or modify each tag individually.
@@ -99,13 +99,13 @@ The system shall allow a student to manually add free-text tags to any of their 
 The system shall allow a student to delete any manually added or confirmed tag from their own questions.
 
 ### REQ-TAG-08
-While a question has no confirmed tags, the system shall display a visual indicator prompting the student to complete tag review.
+The system shall include a `has_confirmed_tags` boolean field in the question detail response, set to `false` when the question has no confirmed tags, so that clients can prompt the student to complete tag review.
 
 ### REQ-TAG-09
 The system shall allow a student to classify a question into one of the following categories: **multiple_choice**, **fill_blank**, **essay**, **true_false**, **calculation**, or **unknown**.
 
 ### REQ-TAG-10
-If the category returned by the recognition API is **unknown**, then the system shall prompt the student to manually select the correct category before the question can be included in a review paper.
+When the category returned by the recognition API is **unknown**, the system shall include a prompt indicator in the question response suggesting the student manually select the correct category; the system shall not prevent an unknown-category question from being added to a review paper.
 
 ---
 
@@ -159,7 +159,7 @@ The system shall allow combining multiple filters in a single search request; al
 The system shall allow a student to create a named review paper by selecting questions from their approved question library.
 
 ### REQ-PAPER-02
-When a student creates a review paper, the system shall require at least one question to be included.
+When a student exports a review paper, the system shall require the paper to contain at least one question. Creating or saving a draft paper with no questions shall be permitted.
 
 ### REQ-PAPER-03
 The system shall allow a student to add, remove, and reorder questions within a draft review paper before exporting.
@@ -171,7 +171,7 @@ The system shall allow a student to filter and search their question library wit
 When a student exports a review paper, the system shall generate a PDF document containing the selected questions in the chosen order, with each question's subject and category label.
 
 ### REQ-PAPER-06
-When a PDF is generated, the system shall return a download link to the student and shall not require the student to remain on the page during generation.
+When a PDF is generated, the system shall return the download path to the student in the same response; PDF generation is synchronous.
 
 ### REQ-PAPER-07
 If a question included in a paper export has status other than **approved**, then the system shall exclude that question from the PDF and notify the student of the exclusion.
@@ -216,7 +216,62 @@ The system shall never silently swallow errors or substitute default values for 
 
 ---
 
-## 九、非功能性需求
+## 九、复习调度
+
+### REQ-SCHED-01
+When a student submits a review result for a question, the system shall record the result (pass or fail) and compute the next review date using the Ebbinghaus interval: the initial interval is 1 day; on pass, the current interval is doubled; on fail, the interval is reset to 1 day.
+
+### REQ-SCHED-02
+When the next review date is computed, the system shall persist the schedule to DynamoDB with a TTL of 30 days beyond the next review date.
+
+### REQ-SCHED-03
+The system shall allow a student to retrieve the list of questions scheduled for review on or before the current date.
+
+### REQ-SCHED-04
+If a student submits a review result with a value other than **pass** or **fail**, then the system shall return a 400 Bad Request response and shall not update the schedule.
+
+### REQ-SCHED-05
+If a student attempts to retrieve or submit a review result for a question owned by a different user, then the system shall return a 403 Forbidden response.
+
+---
+
+## 十、AI 推荐
+
+### REQ-REC-01
+The system shall allow a student to request an AI-generated recommendation of up to 5 questions to review next, ranked by predicted review value.
+
+### REQ-REC-02
+When generating recommendations, the system shall pass the student's error record summary (question IDs, wrong counts, last wrong dates) to the Bedrock model **claude-sonnet-4-6** and shall return each recommendation with a `question_id`, `reason`, and `confidence` field.
+
+### REQ-REC-03
+If the Bedrock response is missing `question_id` or `reason` fields, then the system shall return a 502 Bad Gateway error and shall not return a partial recommendation list.
+
+---
+
+## 十一、错题记录
+
+### REQ-ERR-REC-01
+The system shall maintain an error record per (user, question) pair, tracking the cumulative wrong count and the date of the most recent error.
+
+### REQ-ERR-REC-02
+The system shall allow a student to retrieve their own error records; all queries shall be scoped to the authenticated user's ID.
+
+---
+
+## 十二、通知
+
+### REQ-NOTIF-01
+The system shall allow a student to retrieve their notification list, with support for filtering to unread notifications only and pagination (default page size: 20, maximum: 100).
+
+### REQ-NOTIF-02
+When a student marks a notification as read, the system shall update that notification's read status and shall return 204 No Content.
+
+### REQ-NOTIF-03
+The system shall allow a student to mark all of their notifications as read in a single operation.
+
+---
+
+## 十三、非功能性需求
 
 ### REQ-NFR-01
 The system shall respond to all API requests (excluding PDF generation and recognition API calls) within 500 ms at the 95th percentile under normal load.
@@ -228,7 +283,7 @@ The system shall use Go 1.25 for all backend services.
 The system shall be deployed on AWS ECS Fargate with MySQL (RDS) as the primary relational store and DynamoDB for review scheduling.
 
 ### REQ-NFR-04
-The system shall use structured JSON logging (slog) for all server-side log output, including user_id and request_id on every log entry.
+The system shall use structured JSON logging (slog) for all server-side log output, including user_id on every log entry.
 
 ### REQ-NFR-05
 Where the PDF export feature is included, the system shall generate a downloadable PDF within 10 seconds for papers containing up to 100 questions.
