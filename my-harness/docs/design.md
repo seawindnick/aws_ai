@@ -576,323 +576,244 @@ axios
 
 ---
 
-## 十四、模块交互图
+## 十四、模块交互图（请求处理层次）
 
-```mermaid
-flowchart TD
-    subgraph 前端["前端 Vue 3"]
-        UI[用户浏览器]
-    end
-
-    subgraph 后端["后端 Go 单体服务"]
-        MW["Middleware\nJWT校验 · 角色检查"]
-
-        subgraph Handlers["Handler 层"]
-            H_AUTH[auth]
-            H_Q[question]
-            H_TAG[tag]
-            H_PAPER[paper]
-            H_REVIEW[review]
-            H_REC[recommend]
-            H_NOTIF[notification]
-            H_STATS[stats]
-            H_CLASS[class]
-            H_TASK[task]
-            H_ADMIN[admin]
-            H_ME[me]
-        end
-
-        subgraph Services["Service 层"]
-            S_AUTH[auth]
-            S_Q[question]
-            S_TAG[tag]
-            S_PAPER[paper]
-            S_REVIEW[review]
-            S_REC[recommend]
-            S_NOTIF[notification]
-            S_STATS[stats]
-            S_CLASS[class]
-            S_TASK[task]
-            S_ADMIN[admin]
-        end
-    end
-
-    subgraph 存储["存储层"]
-        MYSQL[(MySQL\nRDS)]
-        DYNAMO[(DynamoDB\n复习调度)]
-        DISK[/本地磁盘\n/data/imgs/]
-    end
-
-    subgraph 外部["外部服务"]
-        COGNITO[Amazon Cognito\n认证]
-        RECOG[第三方识别 API\n图片→题目文本]
-        BEDROCK[Amazon Bedrock\nclaude-sonnet-4-6]
-    end
-
-    UI -->|HTTPS JSON| MW
-    MW --> H_AUTH & H_Q & H_TAG & H_PAPER
-    MW --> H_REVIEW & H_REC & H_NOTIF & H_STATS
-    MW --> H_CLASS & H_TASK & H_ADMIN & H_ME
-
-    H_AUTH --> S_AUTH
-    H_Q --> S_Q
-    H_TAG --> S_TAG
-    H_PAPER --> S_PAPER
-    H_REVIEW --> S_REVIEW
-    H_REC --> S_REC
-    H_NOTIF --> S_NOTIF
-    H_STATS --> S_STATS
-    H_CLASS --> S_CLASS
-    H_TASK --> S_TASK
-    H_ADMIN --> S_ADMIN
-    H_ME --> S_ADMIN
-
-    S_AUTH -->|创建/禁用账号| COGNITO
-    S_Q -->|写题目| MYSQL
-    S_Q -->|存图片| DISK
-    S_Q -->|识别请求| RECOG
-    S_TAG --> MYSQL
-    S_PAPER --> MYSQL
-    S_REVIEW -->|写复习记录| MYSQL
-    S_REVIEW -->|读写调度| DYNAMO
-    S_REC -->|错题摘要| BEDROCK
-    S_NOTIF --> MYSQL
-    S_STATS --> MYSQL
-    S_STATS -->|读调度interval| DYNAMO
-    S_CLASS --> MYSQL
-    S_TASK --> MYSQL
-    S_TASK -->|触发调度更新| S_REVIEW
-    S_ADMIN -->|禁用账号| COGNITO
-    S_ADMIN --> MYSQL
-
-    %% 跨 Service 调用
-    S_Q -->|上传后创建suggested标签| S_TAG
-    S_REVIEW -->|审核完成发通知| S_NOTIF
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       前端 Vue 3                              │
+└──────────────────────────────┬───────────────────────────────┘
+                               │ HTTPS / JSON API
+┌──────────────────────────────▼───────────────────────────────┐
+│                   Go 单体服务 (:8080)                         │
+│                                                               │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │           Middleware  JWT校验 · 角色检查                  │ │
+│  └──────────────────────────┬────────────────────────────── ┘ │
+│                             │                                 │
+│  ┌──────────────────────────▼──────────────────────────────┐ │
+│  │                     Handler 层                           │ │
+│  │  auth  question  tag   paper   review   recommend        │ │
+│  │  notification  stats  class   task   admin   me          │ │
+│  └──────────────────────────┬────────────────────────────── ┘ │
+│                             │                                 │
+│  ┌──────────────────────────▼──────────────────────────────┐ │
+│  │                     Service 层                           │ │
+│  │  auth  question  tag   paper   review   recommend        │ │
+│  │  notification  stats  class   task   admin               │ │
+│  │                                                          │ │
+│  │  跨 Service 调用:                                        │ │
+│  │    question ──► tag       上传后创建 suggested 标签      │ │
+│  │    review   ──► notif     审核完成发站内通知             │ │
+│  │    task     ──► review    任务提交触发复习调度           │ │
+│  └──────────┬───────────────────────────┬───────────────────┘ │
+└─────────────┼───────────────────────────┼─────────────────────┘
+              │                           │
+              ▼                           ▼
+┌─────────────────────────┐   ┌──────────────────────────────────┐
+│        存储层            │   │           外部服务                │
+│                         │   │                                  │
+│  MySQL (RDS)            │   │  Amazon Cognito  认证 / 账号管理  │
+│  所有业务结构化数据       │   │  第三方识别 API  图片 → 题目文本  │
+│                         │   │  Amazon Bedrock  AI 推荐         │
+│  DynamoDB               │   │    claude-sonnet-4-6             │
+│  复习调度 + TTL 自动清理  │   └──────────────────────────────────┘
+│                         │
+│  本地磁盘 /data/imgs     │
+│  原始图片文件            │
+└─────────────────────────┘
 ```
 
 ---
 
-## 十五、数据库 ER 图
+## 十五、数据库表结构与关系
 
-```mermaid
-erDiagram
-    users {
-        varchar36 id PK
-        varchar128 cognito_sub UK
-        varchar255 email UK
-        varchar100 nickname
-        enum role "student|teacher|admin"
-        enum status "active|inactive"
-        datetime deactivated_at
-        datetime created_at
-    }
+### 表结构
 
-    questions {
-        varchar36 id PK
-        varchar36 user_id FK
-        varchar500 image_path
-        text raw_text
-        varchar100 subject
-        enum category "multiple_choice|fill_blank|essay|true_false|calculation|unknown"
-        enum status "pending_review|approved|rejected"
-        decimal confidence
-        text review_note
-        varchar36 reviewed_by FK
-        datetime reviewed_at
-        datetime created_at
-    }
+```
+  users                              questions
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  UK  cognito_sub     varchar(128)   FK  user_id          varchar(36)
+  UK  email           varchar(255)       image_path       varchar(500)
+      nickname        varchar(100)       raw_text         text
+      role            enum               subject          varchar(100)
+        student / teacher / admin        category         enum
+      status          enum                 multiple_choice / fill_blank
+        active / inactive                  essay / true_false
+      deactivated_at  datetime             calculation / unknown
+      created_at      datetime           status           enum
+                                           pending_review / approved
+                                           rejected
+                                         confidence       decimal
+                                    FK  reviewed_by      varchar(36)
+                                         reviewed_at     datetime
+                                         created_at      datetime
 
-    question_tags {
-        varchar36 id PK
-        varchar36 question_id FK
-        varchar36 user_id FK
-        varchar100 name
-        enum status "suggested|confirmed"
-        datetime created_at
-    }
+  question_tags                      papers
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  FK  question_id     varchar(36)    FK  user_id          varchar(36)
+  FK  user_id         varchar(36)        title            varchar(200)
+      name            varchar(100)       status           enum
+      status          enum                 draft / published
+        suggested / confirmed            created_at      datetime
+      created_at      datetime           updated_at      datetime
+  UK  (question_id, name)
 
-    papers {
-        varchar36 id PK
-        varchar36 user_id FK
-        varchar200 title
-        enum status "draft|published"
-        datetime created_at
-        datetime updated_at
-    }
+  paper_questions                    error_records
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  FK  paper_id        varchar(36)    FK  user_id          varchar(36)
+  FK  question_id     varchar(36)    FK  question_id      varchar(36)
+      position        int                wrong_count      int
+      created_at      datetime           last_wrong_at   datetime
+  UK  (paper_id, question_id)            created_at      datetime
+                                    UK  (user_id, question_id)
 
-    paper_questions {
-        varchar36 id PK
-        varchar36 paper_id FK
-        varchar36 question_id FK
-        int position
-        datetime created_at
-    }
+  review_records                     notifications
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  FK  user_id         varchar(36)    FK  user_id          varchar(36)
+  FK  question_id     varchar(36)        type            varchar(50)
+      result          enum               title           varchar(200)
+        pass / fail                      body            text
+      reviewed_at     datetime           ref_id          varchar(36)
+                                         is_read         bool
+                                         created_at      datetime
 
-    error_records {
-        varchar36 id PK
-        varchar36 user_id FK
-        varchar36 question_id FK
-        int wrong_count
-        datetime last_wrong_at
-        datetime created_at
-    }
+  classes                            class_members
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  FK  teacher_id      varchar(36)    FK  class_id         varchar(36)
+      name            varchar(100)   FK  user_id          varchar(36)
+  UK  invite_code     varchar(6)         joined_at       datetime
+      created_at      datetime       UK  (class_id, user_id)
 
-    review_records {
-        varchar36 id PK
-        varchar36 user_id FK
-        varchar36 question_id FK
-        enum result "pass|fail"
-        datetime reviewed_at
-    }
+  class_tasks                        task_submissions
+  ─────────────────────────────────  ──────────────────────────────────────
+  PK  id              varchar(36)    PK  id              varchar(36)
+  FK  class_id        varchar(36)    FK  task_id          varchar(36)
+  FK  paper_id        varchar(36)    FK  user_id          varchar(36)
+  FK  assigned_by     varchar(36)    FK  question_id      varchar(36)
+      title           varchar(200)       result           enum
+      due_at          datetime             pass / fail
+      status          enum               submitted_at    datetime
+        active / closed             UK  (task_id, user_id, question_id)
+      created_at      datetime
 
-    notifications {
-        varchar36 id PK
-        varchar36 user_id FK
-        varchar50 type
-        varchar200 title
-        text body
-        varchar36 ref_id
-        bool is_read
-        datetime created_at
-    }
+  DynamoDB: review_schedules
+  ──────────────────────────────────────────────────────────────────
+  PK  user_id         String
+  SK  question_id     String
+      next_review_at  String  ISO8601
+      interval_days   Number
+      TTL             Number  Unix 时间戳 (next_review_at + 30天)
+```
 
-    classes {
-        varchar36 id PK
-        varchar100 name
-        varchar36 teacher_id FK
-        varchar6 invite_code UK
-        datetime created_at
-    }
+### 外键关系一览
 
-    class_members {
-        varchar36 id PK
-        varchar36 class_id FK
-        varchar36 user_id FK
-        datetime joined_at
-    }
+```
+  主表              从表                 关系说明
+  ──────────────    ──────────────────   ──────────────────────────
+  users        1──* questions            用户拥有多道题目
+  users        1──* question_tags        用户拥有多个标签
+  users        1──* papers               用户拥有多张试卷
+  users        1──* error_records        用户产生多条错题记录
+  users        1──* review_records       用户提交多条复习记录
+  users        1──* notifications        用户接收多条通知
+  users        1──* class_members        用户加入多个班级
+  users        1──* task_submissions     用户提交多条任务结果
+  users        1──* classes              教师教授多个班级
 
-    class_tasks {
-        varchar36 id PK
-        varchar36 class_id FK
-        varchar36 paper_id FK
-        varchar200 title
-        varchar36 assigned_by FK
-        datetime due_at
-        enum status "active|closed"
-        datetime created_at
-    }
+  questions    1──* question_tags        题目拥有多个标签
+  questions    1──* paper_questions      题目出现在多张试卷
+  questions    1──* error_records        题目关联多条错题记录
+  questions    1──* review_records       题目关联多条复习记录
+  questions    1──* task_submissions     题目关联多条任务提交
 
-    task_submissions {
-        varchar36 id PK
-        varchar36 task_id FK
-        varchar36 user_id FK
-        varchar36 question_id FK
-        enum result "pass|fail"
-        datetime submitted_at
-    }
+  papers       1──* paper_questions      试卷包含多道题目
+  papers       1──* class_tasks          试卷用于多个班级任务
 
-    users ||--o{ questions : "拥有"
-    users ||--o{ question_tags : "拥有"
-    users ||--o{ papers : "拥有"
-    users ||--o{ error_records : "产生"
-    users ||--o{ review_records : "提交"
-    users ||--o{ notifications : "接收"
-    users ||--o{ class_members : "加入"
-    users ||--o{ task_submissions : "提交"
-    users ||--o{ classes : "教授"
+  classes      1──* class_members        班级包含多个成员
+  classes      1──* class_tasks          班级发布多个任务
 
-    questions ||--o{ question_tags : "拥有"
-    questions ||--o{ paper_questions : "包含于"
-    questions ||--o{ error_records : "关联"
-    questions ||--o{ review_records : "关联"
-    questions ||--o{ task_submissions : "关联"
-
-    papers ||--o{ paper_questions : "包含"
-    papers ||--o{ class_tasks : "用于"
-
-    classes ||--o{ class_members : "包含"
-    classes ||--o{ class_tasks : "发布"
-
-    class_tasks ||--o{ task_submissions : "收到"
+  class_tasks  1──* task_submissions     任务收到多条提交
 ```
 
 ---
 
 ## 十六、功能模块关系图
 
-> 箭头表示依赖方向（A → B 表示 A 依赖 B 提供的能力）。
-> 实线为强依赖（核心流程必须），虚线为弱依赖（触发或通知）。
+```
+  说明:  ──►  强依赖（核心流程）     - -►  触发 / 通知（弱依赖）
 
-```mermaid
-flowchart LR
-    subgraph 用户体系
-        AUTH[认证模块\nCognito JWT]
-        ACCT[账号管理\n管理员创建/停用]
-        ME[用户自管理\n改密码/昵称/注销]
-    end
+  ┌──────────────────────────────────────────────────────────────┐
+  │  认证模块 (Cognito JWT)                                       │
+  │  提供 userID，所有请求必须先经过认证中间件                     │
+  └──────────────────────────────────────────────────────────────┘
+        │                              │
+        ▼                              ▼
+  ┌───────────────┐            ┌───────────────────┐
+  │   账号管理     │            │    用户自管理       │
+  │ 管理员         │            │ 改密码/昵称/注销   │
+  │ 创建/停用/     │            └───────────────────┘
+  │ 改角色         │
+  └───────────────┘
 
-    subgraph 题目核心
-        UPLOAD[上传识别\n图片→题目]
-        TAG[标签管理\nsuggest/confirm]
-        SEARCH[搜索\n多维过滤]
-        QREVIEW[人工审核\n审核队列]
-    end
+  ─────────────────── 题目核心流程 ──────────────────────────────
 
-    subgraph 学习闭环
-        SCHED[复习调度\nEbbinghaus]
-        EREC[错题记录\nwrong_count]
-        REC[AI 推荐\nBedrock]
-    end
+  ┌──────────┐         ┌──────────┐         ┌──────────┐
+  │ 上传识别  │ ──────► │ 标签管理  │ ──────► │   搜索   │
+  │ 图片→题目 │         │suggest/  │ 标签可   │ 多维过滤  │
+  └────┬─────┘         │ confirm  │ 用于过滤  └────┬─────┘
+       │               └──────────┘                │
+       │ 低置信度                                   │ 搜索条件复用
+       ▼                                            ▼
+  ┌──────────┐ - - ► ┌──────────┐          ┌──────────────┐
+  │ 人工审核  │       │   通知   │          │   试卷编排   │
+  │ 审核队列  │ 审核  │ 站内消息  │          │  草稿/发布   │
+  └──────────┘ 完成  └──────────┘          └──────┬───────┘
+                                                   │          │
+                                            ──────► ▼          ▼
+                                            仅含  ┌──────────┐
+                                            已审  │ PDF 导出  │
+                                            核题  └──────────┘
+                                                   │
+                                                   │ 发布为班级任务
+  ─────────────────── 班级协作 ──────────── ────── ▼ ──────────────
 
-    subgraph 组卷导出
-        PAPER[试卷编排\n草稿/发布]
-        EXPORT[PDF 导出\ngofpdf]
-    end
+  ┌──────────┐                  ┌───────────────────────────────┐
+  │ 班级管理  │ ───────────────► │           班级任务             │
+  │ 邀请码加入│ 成员资格校验      │  教师布置 / 学生逐题提交       │
+  └──────────┘                  └──────────┬──────────┬─────────┘
+                                           │          │
+                                  提交触发 ▼          ▼ 提交触发
+  ─────────────────── 学习闭环 ────────────────────────────────────
 
-    subgraph 协作
-        CLASS[班级管理\n邀请码]
-        TASK[班级任务\n布置/提交]
-    end
+  ┌──────────┐          ┌──────────┐          ┌──────────┐
+  │  错题记录 │ ◄─────── │ 复习调度  │ ◄─────── │ 复习调度  │
+  │ wrong_cnt │         │Ebbinghaus│          │ 提交结果  │
+  └────┬─────┘          └────┬─────┘          └──────────┘
+       │                     │
+       │  错题摘要            │  今日待复习
+       └──────────┬──────────┘
+                  ▼
+           ┌──────────┐
+           │  AI 推荐  │
+           │  Bedrock  │
+           └──────────┘
 
-    subgraph 辅助
-        NOTIF[通知\n站内消息]
-        STATS[统计看板\n趋势/掌握率]
-    end
+  ─────────────────── 统计看板 ────────────────────────────────────
 
-    %% 所有模块都依赖认证
-    AUTH -.->|JWT userID| UPLOAD & TAG & SEARCH & QREVIEW
-    AUTH -.->|JWT userID| SCHED & EREC & REC & PAPER & EXPORT
-    AUTH -.->|JWT userID| CLASS & TASK & NOTIF & STATS & ME & ACCT
-
-    %% 账号管理
-    ACCT -->|调 Cognito| AUTH
-    ME -->|调 Cognito 改密码| AUTH
-
-    %% 题目核心流程
-    UPLOAD -->|置信度分级后入库| QREVIEW
-    UPLOAD -->|识别结果生成| TAG
-    QREVIEW -->|审核完成触发| NOTIF
-    TAG -->|confirmed 标签供| SEARCH
-    SEARCH -->|同一搜索条件| PAPER
-
-    %% 学习闭环
-    EREC -->|错题摘要输入| REC
-    SCHED -->|今日待复习列表| REC
-    SCHED -->|调度更新| EREC
-
-    %% 组卷导出
-    PAPER -->|只含 approved 题| EXPORT
-    PAPER -->|发布为班级任务| TASK
-
-    %% 协作
-    CLASS -->|成员资格校验| TASK
-    TASK -->|提交结果触发| SCHED
-    TASK -->|提交结果触发| EREC
-
-    %% 统计
-    SCHED -->|interval_days| STATS
-    EREC -->|wrong_count| STATS
-    UPLOAD -->|新增题目数| STATS
+  错题记录 + 复习调度(interval_days) + 新增题目数
+                  │
+                  ▼
+         ┌────────────────┐
+         │   统计看板      │
+         │ 错题趋势        │
+         │ 科目掌握率      │
+         │ 今日待复习数    │
+         └────────────────┘
 ```
 
 ---
@@ -901,101 +822,100 @@ flowchart LR
 
 ### 1. 上传识别完整流程
 
-```mermaid
-sequenceDiagram
-    participant U as 学生
-    participant H as Handler
-    participant S as QuestionService
-    participant R as 识别API
-    participant DB as MySQL
-    participant TS as TagService
-
-    U->>H: POST /api/questions (图片)
-    H->>H: 校验格式/大小 (JPEG/PNG, 1KB~10MB)
-    H->>S: Upload(userID, imageBytes)
-    S->>S: 写图片到 /data/imgs/{userID}/{uuid}.jpg
-    S->>R: 调识别API(base64图片)
-    R-->>S: {raw_text, subject, tags, confidence}
-    alt confidence >= 0.85
-        S->>DB: INSERT question (status=approved)
-    else 0.50 <= confidence < 0.85
-        S->>DB: INSERT question (status=pending_review)
-    else confidence < 0.50
-        S->>S: 删除图片文件
-        S-->>H: 返回 422 错误
-    end
-    S->>TS: CreateSuggestedTags(questionID, tags)
-    TS->>DB: INSERT question_tags (status=suggested)
-    S-->>H: UploadResult
-    H-->>U: 201/202 + question JSON
+```
+  学生         Handler       QuestionSvc    识别API      MySQL       TagSvc
+   |              |               |             |            |           |
+   |─POST /questions(图片)────────►|             |            |           |
+   |              |               |             |            |           |
+   |              |─校验格式/大小─►|             |            |           |
+   |              | JPEG/PNG      |             |            |           |
+   |              | 1KB ~ 10MB    |             |            |           |
+   |              |               |             |            |           |
+   |              |─Upload()─────►|             |            |           |
+   |              |               |─写图片──────────────────►|           |
+   |              |               |  /data/imgs/{uid}/{uuid}.jpg         |
+   |              |               |             |            |           |
+   |              |               |─调识别API──►|            |           |
+   |              |               |◄────────────{text,subject,           |
+   |              |               |              tags,confidence}        |
+   |              |               |             |            |           |
+   |              |               | confidence >= 0.85       |           |
+   |              |               |─INSERT question(approved)►           |
+   |              |               |             |            |           |
+   |              |               | 0.50 <= confidence < 0.85|           |
+   |              |               |─INSERT question(pending_review)►     |
+   |              |               |             |            |           |
+   |              |               | confidence < 0.50        |           |
+   |              |               |─删除图片文件              |           |
+   |              |◄─error────────|             |            |           |
+   |◄─422─────────|               |             |            |           |
+   |              |               |             |            |           |
+   |              |               |─CreateSuggestedTags()───────────────►|
+   |              |               |             |            |◄INSERT tags|
+   |              |               |             |            | suggested  |
+   |◄─201/202 JSON|◄─UploadResult─|             |            |           |
 ```
 
 ### 2. 人工审核 + 通知流程
 
-```mermaid
-sequenceDiagram
-    participant T as 教师
-    participant H as ReviewQueueHandler
-    participant S as ReviewQueueService
-    participant DB as MySQL
-    participant NS as NotificationService
-
-    T->>H: POST /api/review-queue/:id/review
-    H->>S: Review(questionID, reviewerID, action)
-    S->>DB: SELECT question WHERE id=? (不过滤user_id)
-    DB-->>S: question (status=pending_review)
-    S->>DB: UPDATE question SET status=approved/rejected
-    S->>NS: NotifyQuestionReviewed(question.user_id, status)
-    NS->>DB: INSERT notifications
-    S-->>H: nil
-    H-->>T: 204 No Content
+```
+  教师         Handler        ReviewQueueSvc    MySQL      NotifSvc
+   |              |                 |              |            |
+   |─POST /review-queue/:id/review─►|              |            |
+   |              |                 |              |            |
+   |              |─Review()───────►|              |            |
+   |              |                 |─SELECT question(不过滤user_id)►
+   |              |                 |◄─────────────{status=pending_review}
+   |              |                 |              |            |
+   |              |                 |─UPDATE question──────────►|
+   |              |                 |  status=approved/rejected |
+   |              |                 |              |            |
+   |              |                 |─NotifyQuestionReviewed()─►|
+   |              |                 |              |◄─INSERT notification
+   |              |◄─nil────────────|              |            |
+   |◄─204─────────|                 |              |            |
 ```
 
 ### 3. 复习提交 + Ebbinghaus 调度
 
-```mermaid
-sequenceDiagram
-    participant U as 学生
-    participant H as ReviewHandler
-    participant S as ReviewService
-    participant DB as MySQL
-    participant DDB as DynamoDB
-
-    U->>H: POST /api/review/:id/result {result: pass/fail}
-    H->>S: SubmitResult(userID, questionID, result)
-    S->>DB: INSERT review_records
-    S->>DDB: GET schedule (PK=userID, SK=questionID)
-    DDB-->>S: {interval_days: N}
-    alt result = pass
-        S->>S: new_interval = N * 2
-    else result = fail
-        S->>S: new_interval = 1
-    end
-    S->>DDB: PUT schedule {next_review_at, interval_days, TTL}
-    S-->>H: nil
-    H-->>U: 204 No Content
+```
+  学生         Handler       ReviewSvc      MySQL       DynamoDB
+   |              |               |             |            |
+   |─POST /review/:id/result──────►|             |            |
+   |  {result: pass/fail}          |             |            |
+   |              |─SubmitResult()►|             |            |
+   |              |               |─INSERT review_records────►|
+   |              |               |             |            |
+   |              |               |─GET schedule(PK=userID,SK=questionID)►
+   |              |               |◄────────────────────────{interval_days:N}
+   |              |               |             |            |
+   |              |               | result=pass  → new_interval = N × 2
+   |              |               | result=fail  → new_interval = 1
+   |              |               |             |            |
+   |              |               |─PUT schedule────────────►|
+   |              |               |  {next_review_at,        |
+   |              |               |   interval_days, TTL}    |
+   |◄─204─────────|◄─nil──────────|             |            |
 ```
 
 ### 4. 班级任务提交流程
 
-```mermaid
-sequenceDiagram
-    participant U as 学生
-    participant H as TaskHandler
-    participant S as TaskService
-    participant DB as MySQL
-    participant RS as ReviewService
-
-    U->>H: POST /api/classes/:id/tasks/:tid/submit
-    H->>S: Submit(taskID, userID, results[])
-    S->>DB: SELECT task (检查 status=active, due_at)
-    S->>DB: SELECT class_members (验证学生在班级)
-    loop 每道题
-        S->>DB: INSERT task_submissions (UNIQUE冲突→409)
-        S->>RS: SubmitResult(userID, questionID, result)
-        RS->>DB: INSERT review_records
-        RS->>DB: UPDATE DynamoDB schedule
-    end
-    S-->>H: {succeeded, failed}
-    H-->>U: 207 Multi-Status
+```
+  学生         Handler       TaskSvc        MySQL       ReviewSvc
+   |              |               |             |            |
+   |─POST /classes/:id/tasks/:tid/submit────────►|            |
+   |  {results:[{question_id,result},...]}        |            |
+   |              |─Submit()─────►|             |            |
+   |              |               |─SELECT task(检查status=active,due_at)►
+   |              |               |─SELECT class_members(验证学生在班级)►
+   |              |               |             |            |
+   |              |               | ┌── 每道题循环 ──────────────────────┐
+   |              |               | │─INSERT task_submissions───────────►│
+   |              |               | │  UNIQUE冲突 → 409 跳过该题         │
+   |              |               | │─SubmitResult()─────────────────────►
+   |              |               | │             |◄─INSERT review_records
+   |              |               | │             |◄─PUT DynamoDB schedule
+   |              |               | └────────────────────────────────────┘
+   |◄─207─────────|◄─{succeeded,  |             |            |
+   |  Multi-Status|   failed}─────|             |            |
 ```
