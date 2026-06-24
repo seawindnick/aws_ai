@@ -31,12 +31,12 @@ func main() {
 
 	ctx := context.Background()
 
-	pgPool, err := db.NewPostgres(ctx, cfg)
+	mysqlDB, err := db.NewMySQL(ctx, cfg)
 	if err != nil {
-		slog.Error("connect postgres", "error", err)
+		slog.Error("connect mysql", "error", err)
 		os.Exit(1)
 	}
-	defer pgPool.Close()
+	defer mysqlDB.Close()
 
 	ddbClient, err := db.NewDynamoDB(ctx, cfg.AWSRegion)
 	if err != nil {
@@ -53,10 +53,10 @@ func main() {
 	cognitoClient := cognitoidentityprovider.NewFromConfig(awsCfg)
 
 	// repositories
-	userRepo := repository.NewUserRepo(pgPool)
-	questionRepo := repository.NewQuestionRepo(pgPool)
-	errorRepo := repository.NewErrorRecordRepo(pgPool)
-	reviewRepo := repository.NewReviewRepo(pgPool, ddbClient, cfg.DynamoTableSchedule)
+	userRepo := repository.NewUserRepo(mysqlDB)
+	questionRepo := repository.NewQuestionRepo(mysqlDB)
+	errorRepo := repository.NewErrorRecordRepo(mysqlDB)
+	reviewRepo := repository.NewReviewRepo(mysqlDB, ddbClient, cfg.DynamoTableSchedule)
 
 	// services
 	recognitionSvc := service.NewRecognitionService(cfg.RecognitionAPIURL, cfg.RecognitionAPIKey, cfg.ExternalTimeoutSec)

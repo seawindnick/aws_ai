@@ -2,26 +2,27 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/workshop/wrong-question/internal/model"
 )
 
 type ErrorRecordRepo struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewErrorRecordRepo(db *pgxpool.Pool) *ErrorRecordRepo {
+func NewErrorRecordRepo(db *sql.DB) *ErrorRecordRepo {
 	return &ErrorRecordRepo{db: db}
 }
 
 func (r *ErrorRecordRepo) Upsert(ctx context.Context, e *model.ErrorRecord) error {
-	_, err := r.db.Exec(ctx,
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO errors (id, user_id, question_id, wrong_count, last_wrong_at, created_at)
-		 VALUES ($1, $2, $3, 1, $4, $5)
-		 ON CONFLICT (user_id, question_id)
-		 DO UPDATE SET wrong_count = errors.wrong_count + 1, last_wrong_at = EXCLUDED.last_wrong_at`,
+		 VALUES (?, ?, ?, 1, ?, ?)
+		 ON DUPLICATE KEY UPDATE
+		   wrong_count = wrong_count + 1,
+		   last_wrong_at = VALUES(last_wrong_at)`,
 		e.ID, e.UserID, e.QuestionID, e.LastWrongAt, e.CreatedAt,
 	)
 	if err != nil {
@@ -31,9 +32,9 @@ func (r *ErrorRecordRepo) Upsert(ctx context.Context, e *model.ErrorRecord) erro
 }
 
 func (r *ErrorRecordRepo) ListByUser(ctx context.Context, userID string) ([]*model.ErrorRecord, error) {
-	rows, err := r.db.Query(ctx,
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, user_id, question_id, wrong_count, last_wrong_at, created_at
-		 FROM errors WHERE user_id = $1 ORDER BY last_wrong_at DESC`,
+		 FROM errors WHERE user_id = ? ORDER BY last_wrong_at DESC`,
 		userID,
 	)
 	if err != nil {

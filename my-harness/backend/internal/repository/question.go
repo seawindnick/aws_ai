@@ -2,25 +2,30 @@ package repository
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/workshop/wrong-question/internal/model"
 )
 
 type QuestionRepo struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewQuestionRepo(db *pgxpool.Pool) *QuestionRepo {
+func NewQuestionRepo(db *sql.DB) *QuestionRepo {
 	return &QuestionRepo{db: db}
 }
 
 func (r *QuestionRepo) Create(ctx context.Context, q *model.Question) error {
-	_, err := r.db.Exec(ctx,
+	tags, err := json.Marshal(q.TopicTags)
+	if err != nil {
+		return fmt.Errorf("marshal topic_tags: %w", err)
+	}
+	_, err = r.db.ExecContext(ctx,
 		`INSERT INTO questions (id, user_id, image_path, raw_text, subject, topic_tags, source, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		q.ID, q.UserID, q.ImagePath, q.RawText, q.Subject, q.TopicTags, q.Source, q.CreatedAt,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		q.ID, q.UserID, q.ImagePath, q.RawText, q.Subject, string(tags), q.Source, q.CreatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("insert question: %w", err)
@@ -30,12 +35,12 @@ func (r *QuestionRepo) Create(ctx context.Context, q *model.Question) error {
 
 func (r *QuestionRepo) ListByUser(ctx context.Context, userID, subject string, page, pageSize int) ([]*model.Question, error) {
 	offset := (page - 1) * pageSize
-	rows, err := r.db.Query(ctx,
+	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, user_id, image_path, raw_text, subject, topic_tags, source, created_at
 		 FROM questions
-		 WHERE user_id = $1 AND ($2 = '' OR subject = $2)
-		 ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
-		userID, subject, pageSize, offset,
+		 WHERE user_id = ? AND (? = '' OR subject = ?)
+		 ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+		userID, subject, subject, pageSize, offset,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list questions: %w", err)
@@ -45,8 +50,12 @@ func (r *QuestionRepo) ListByUser(ctx context.Context, userID, subject string, p
 	var result []*model.Question
 	for rows.Next() {
 		q := &model.Question{}
-		if err := rows.Scan(&q.ID, &q.UserID, &q.ImagePath, &q.RawText, &q.Subject, &q.TopicTags, &q.Source, &q.CreatedAt); err != nil {
+		var tagsJSON string
+		if err := rows.Scan(&q.ID, &q.UserID, &q.ImagePath, &q.RawText, &q.Subject, &tagsJSON, &q.Source, &q.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan question: %w", err)
+		}
+		if err := json.Unmarshal([]byte(tagsJSON), &q.TopicTags); err != nil {
+			return nil, fmt.Errorf("unmarshal topic_tags: %w", err)
 		}
 		result = append(result, q)
 	}
@@ -58,25 +67,33 @@ func (r *QuestionRepo) ListByUser(ctx context.Context, userID, subject string, p
 
 func (r *QuestionRepo) GetByID(ctx context.Context, id, userID string) (*model.Question, error) {
 	q := &model.Question{}
-	err := r.db.QueryRow(ctx,
+	var tagsJSON string
+	err := r.db.QueryRowContext(ctx,
 		`SELECT id, user_id, image_path, raw_text, subject, topic_tags, source, created_at
-		 FROM questions WHERE id = $1 AND user_id = $2`,
+		 FROM questions WHERE id = ? AND user_id = ?`,
 		id, userID,
-	).Scan(&q.ID, &q.UserID, &q.ImagePath, &q.RawText, &q.Subject, &q.TopicTags, &q.Source, &q.CreatedAt)
+	).Scan(&q.ID, &q.UserID, &q.ImagePath, &q.RawText, &q.Subject, &tagsJSON, &q.Source, &q.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get question: %w", err)
+	}
+	if err := json.Unmarshal([]byte(tagsJSON), &q.TopicTags); err != nil {
+		return nil, fmt.Errorf("unmarshal topic_tags: %w", err)
 	}
 	return q, nil
 }
 
 func (r *QuestionRepo) Delete(ctx context.Context, id, userID string) error {
-	tag, err := r.db.Exec(ctx,
-		`DELETE FROM questions WHERE id = $1 AND user_id = $2`, id, userID,
+	res, err := r.db.ExecContext(ctx,
+		`DELETE FROM questions WHERE id = ? AND user_id = ?`, id, userID,
 	)
 	if err != nil {
 		return fmt.Errorf("delete question: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected: %w", err)
+	}
+	if affected == 0 {
 		return fmt.Errorf("question not found")
 	}
 	return nil

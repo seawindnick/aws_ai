@@ -2,24 +2,24 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/workshop/wrong-question/internal/model"
 )
 
 type UserRepo struct {
-	db *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewUserRepo(db *pgxpool.Pool) *UserRepo {
+func NewUserRepo(db *sql.DB) *UserRepo {
 	return &UserRepo{db: db}
 }
 
 func (r *UserRepo) Create(ctx context.Context, u *model.User) error {
-	_, err := r.db.Exec(ctx,
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO users (id, cognito_sub, email, role, school_name, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
+		 VALUES (?, ?, ?, ?, ?, ?)`,
 		u.ID, u.CognitoSub, u.Email, u.Role, u.SchoolName, u.CreatedAt,
 	)
 	if err != nil {
@@ -30,9 +30,9 @@ func (r *UserRepo) Create(ctx context.Context, u *model.User) error {
 
 func (r *UserRepo) GetByCognitoSub(ctx context.Context, sub string) (*model.User, error) {
 	u := &model.User{}
-	err := r.db.QueryRow(ctx,
+	err := r.db.QueryRowContext(ctx,
 		`SELECT id, cognito_sub, email, role, school_name, created_at
-		 FROM users WHERE cognito_sub = $1`, sub,
+		 FROM users WHERE cognito_sub = ?`, sub,
 	).Scan(&u.ID, &u.CognitoSub, &u.Email, &u.Role, &u.SchoolName, &u.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("get user by cognito_sub: %w", err)

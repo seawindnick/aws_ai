@@ -34,7 +34,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                getEnv("PORT", "8080"),
 		DBHost:              mustEnv("DB_HOST"),
-		DBPort:              getEnv("DB_PORT", "5432"),
+		DBPort:              getEnv("DB_PORT", "3306"),
 		DBUser:              mustEnv("DB_USER"),
 		DBPassword:          mustEnv("DB_PASSWORD"),
 		DBName:              mustEnv("DB_NAME"),
@@ -52,8 +52,8 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) DSN() string {
-	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		c.DBHost, c.DBPort, c.DBUser, c.DBPassword, c.DBName)
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
+		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)
 }
 
 func mustEnv(key string) string {

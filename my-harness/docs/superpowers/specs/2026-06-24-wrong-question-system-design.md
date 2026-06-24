@@ -33,7 +33,7 @@
      ┌──────┼──────────┐
      │      │          │
   [RDS     [本地磁盘   [DynamoDB]
-PostgreSQL] /data/imgs] 复习调度记录]
+  MySQL]   /data/imgs] 复习调度记录]
 
      [第三方识别 API]   [Amazon Bedrock]
 ```
@@ -42,7 +42,7 @@ PostgreSQL] /data/imgs] 复习调度记录]
 - Go 服务直接监听 HTTPS，无 API Gateway 中间层
 - 图片保存到容器本地卷（ECS Task 挂载本地磁盘），路径存入数据库
 - 认证由 Go 服务内 Cognito JWT 中间件统一处理
-- 题目结构化数据存 RDS PostgreSQL
+- 题目结构化数据存 RDS MySQL（utf8mb4，JSON 列存 topic_tags）
 - 复习调度时间戳存 DynamoDB（高频读写 + TTL 自动清理）
 - 数据按 `user_id` 隔离，无多租户
 
@@ -50,7 +50,7 @@ PostgreSQL] /data/imgs] 复习调度记录]
 
 ## 三、数据模型
 
-### PostgreSQL（结构化数据）
+### MySQL（结构化数据）
 
 ```sql
 users
@@ -170,6 +170,9 @@ Logger → Recovery → CORS → CognitoJWTAuth → RateLimiter → Handler
 
 **R7 — 图片路径禁止拼接用户输入**
 图片存储路径必须由服务端用 `question_id`（UUID）生成，禁止将用户上传的文件名或任何用户输入拼入文件路径，防止路径穿越攻击。
+
+**R8 — AI 模型必须使用 claude-sonnet-4-6 `[MUST]`**
+本项目所有 Bedrock / Claude API 调用必须指定模型 `claude-sonnet-4-6`，禁止使用其他模型 ID 或依赖默认模型。Claude Code 开发环境同样通过 `.claude/settings.json` 锁定为此模型。
 
 ---
 

@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -9,24 +10,23 @@ import (
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/workshop/wrong-question/internal/model"
 )
 
 type ReviewRepo struct {
-	db        *pgxpool.Pool
+	db        *sql.DB
 	ddb       *dynamodb.Client
 	tableName string
 }
 
-func NewReviewRepo(db *pgxpool.Pool, ddb *dynamodb.Client, tableName string) *ReviewRepo {
+func NewReviewRepo(db *sql.DB, ddb *dynamodb.Client, tableName string) *ReviewRepo {
 	return &ReviewRepo{db: db, ddb: ddb, tableName: tableName}
 }
 
 func (r *ReviewRepo) SaveRecord(ctx context.Context, rec *model.ReviewRecord) error {
-	_, err := r.db.Exec(ctx,
+	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO review_records (id, user_id, question_id, reviewed_at, result)
-		 VALUES ($1, $2, $3, $4, $5)`,
+		 VALUES (?, ?, ?, ?, ?)`,
 		rec.ID, rec.UserID, rec.QuestionID, rec.ReviewedAt, rec.Result,
 	)
 	if err != nil {
