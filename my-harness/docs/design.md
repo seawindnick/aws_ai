@@ -573,3 +573,245 @@ vue-router 4
 pinia
 axios
 ```
+
+---
+
+## 十四、模块交互图
+
+```mermaid
+flowchart TD
+    subgraph 前端["前端 Vue 3"]
+        UI[用户浏览器]
+    end
+
+    subgraph 后端["后端 Go 单体服务"]
+        MW["Middleware\nJWT校验 · 角色检查"]
+
+        subgraph Handlers["Handler 层"]
+            H_AUTH[auth]
+            H_Q[question]
+            H_TAG[tag]
+            H_PAPER[paper]
+            H_REVIEW[review]
+            H_REC[recommend]
+            H_NOTIF[notification]
+            H_STATS[stats]
+            H_CLASS[class]
+            H_TASK[task]
+            H_ADMIN[admin]
+            H_ME[me]
+        end
+
+        subgraph Services["Service 层"]
+            S_AUTH[auth]
+            S_Q[question]
+            S_TAG[tag]
+            S_PAPER[paper]
+            S_REVIEW[review]
+            S_REC[recommend]
+            S_NOTIF[notification]
+            S_STATS[stats]
+            S_CLASS[class]
+            S_TASK[task]
+            S_ADMIN[admin]
+        end
+    end
+
+    subgraph 存储["存储层"]
+        MYSQL[(MySQL\nRDS)]
+        DYNAMO[(DynamoDB\n复习调度)]
+        DISK[/本地磁盘\n/data/imgs/]
+    end
+
+    subgraph 外部["外部服务"]
+        COGNITO[Amazon Cognito\n认证]
+        RECOG[第三方识别 API\n图片→题目文本]
+        BEDROCK[Amazon Bedrock\nclaude-sonnet-4-6]
+    end
+
+    UI -->|HTTPS JSON| MW
+    MW --> H_AUTH & H_Q & H_TAG & H_PAPER
+    MW --> H_REVIEW & H_REC & H_NOTIF & H_STATS
+    MW --> H_CLASS & H_TASK & H_ADMIN & H_ME
+
+    H_AUTH --> S_AUTH
+    H_Q --> S_Q
+    H_TAG --> S_TAG
+    H_PAPER --> S_PAPER
+    H_REVIEW --> S_REVIEW
+    H_REC --> S_REC
+    H_NOTIF --> S_NOTIF
+    H_STATS --> S_STATS
+    H_CLASS --> S_CLASS
+    H_TASK --> S_TASK
+    H_ADMIN --> S_ADMIN
+    H_ME --> S_ADMIN
+
+    S_AUTH -->|创建/禁用账号| COGNITO
+    S_Q -->|写题目| MYSQL
+    S_Q -->|存图片| DISK
+    S_Q -->|识别请求| RECOG
+    S_TAG --> MYSQL
+    S_PAPER --> MYSQL
+    S_REVIEW -->|写复习记录| MYSQL
+    S_REVIEW -->|读写调度| DYNAMO
+    S_REC -->|错题摘要| BEDROCK
+    S_NOTIF --> MYSQL
+    S_STATS --> MYSQL
+    S_STATS -->|读调度interval| DYNAMO
+    S_CLASS --> MYSQL
+    S_TASK --> MYSQL
+    S_TASK -->|触发调度更新| S_REVIEW
+    S_ADMIN -->|禁用账号| COGNITO
+    S_ADMIN --> MYSQL
+
+    %% 跨 Service 调用
+    S_Q -->|上传后创建suggested标签| S_TAG
+    S_REVIEW -->|审核完成发通知| S_NOTIF
+```
+
+---
+
+## 十五、数据库 ER 图
+
+```mermaid
+erDiagram
+    users {
+        varchar36 id PK
+        varchar128 cognito_sub UK
+        varchar255 email UK
+        varchar100 nickname
+        enum role "student|teacher|admin"
+        enum status "active|inactive"
+        datetime deactivated_at
+        datetime created_at
+    }
+
+    questions {
+        varchar36 id PK
+        varchar36 user_id FK
+        varchar500 image_path
+        text raw_text
+        varchar100 subject
+        enum category "multiple_choice|fill_blank|essay|true_false|calculation|unknown"
+        enum status "pending_review|approved|rejected"
+        decimal confidence
+        text review_note
+        varchar36 reviewed_by FK
+        datetime reviewed_at
+        datetime created_at
+    }
+
+    question_tags {
+        varchar36 id PK
+        varchar36 question_id FK
+        varchar36 user_id FK
+        varchar100 name
+        enum status "suggested|confirmed"
+        datetime created_at
+    }
+
+    papers {
+        varchar36 id PK
+        varchar36 user_id FK
+        varchar200 title
+        enum status "draft|published"
+        datetime created_at
+        datetime updated_at
+    }
+
+    paper_questions {
+        varchar36 id PK
+        varchar36 paper_id FK
+        varchar36 question_id FK
+        int position
+        datetime created_at
+    }
+
+    error_records {
+        varchar36 id PK
+        varchar36 user_id FK
+        varchar36 question_id FK
+        int wrong_count
+        datetime last_wrong_at
+        datetime created_at
+    }
+
+    review_records {
+        varchar36 id PK
+        varchar36 user_id FK
+        varchar36 question_id FK
+        enum result "pass|fail"
+        datetime reviewed_at
+    }
+
+    notifications {
+        varchar36 id PK
+        varchar36 user_id FK
+        varchar50 type
+        varchar200 title
+        text body
+        varchar36 ref_id
+        bool is_read
+        datetime created_at
+    }
+
+    classes {
+        varchar36 id PK
+        varchar100 name
+        varchar36 teacher_id FK
+        varchar6 invite_code UK
+        datetime created_at
+    }
+
+    class_members {
+        varchar36 id PK
+        varchar36 class_id FK
+        varchar36 user_id FK
+        datetime joined_at
+    }
+
+    class_tasks {
+        varchar36 id PK
+        varchar36 class_id FK
+        varchar36 paper_id FK
+        varchar200 title
+        varchar36 assigned_by FK
+        datetime due_at
+        enum status "active|closed"
+        datetime created_at
+    }
+
+    task_submissions {
+        varchar36 id PK
+        varchar36 task_id FK
+        varchar36 user_id FK
+        varchar36 question_id FK
+        enum result "pass|fail"
+        datetime submitted_at
+    }
+
+    users ||--o{ questions : "拥有"
+    users ||--o{ question_tags : "拥有"
+    users ||--o{ papers : "拥有"
+    users ||--o{ error_records : "产生"
+    users ||--o{ review_records : "提交"
+    users ||--o{ notifications : "接收"
+    users ||--o{ class_members : "加入"
+    users ||--o{ task_submissions : "提交"
+    users ||--o{ classes : "教授"
+
+    questions ||--o{ question_tags : "拥有"
+    questions ||--o{ paper_questions : "包含于"
+    questions ||--o{ error_records : "关联"
+    questions ||--o{ review_records : "关联"
+    questions ||--o{ task_submissions : "关联"
+
+    papers ||--o{ paper_questions : "包含"
+    papers ||--o{ class_tasks : "用于"
+
+    classes ||--o{ class_members : "包含"
+    classes ||--o{ class_tasks : "发布"
+
+    class_tasks ||--o{ task_submissions : "收到"
+```
