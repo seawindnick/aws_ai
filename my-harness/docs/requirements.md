@@ -271,7 +271,138 @@ The system shall allow a student to mark all of their notifications as read in a
 
 ---
 
-## 十三、非功能性需求
+## 十三、账号与用户管理
+
+### REQ-ACCT-01
+The system shall allow an admin to create a user account by specifying an email address and role; the system shall generate a random initial password and return it in the creation response, displayed only once.
+
+### REQ-ACCT-02
+The system shall allow an admin to import user accounts in bulk by uploading a CSV file containing email and role columns; each row shall be processed independently and the response shall list succeeded and failed rows without aborting the entire batch. A single import request shall not exceed 200 rows.
+
+### REQ-ACCT-03
+When an admin deactivates a user account, the system shall immediately revoke the user's ability to authenticate and shall retain all of that user's question and review data.
+
+### REQ-ACCT-04
+When an admin reactivates a deactivated account, the system shall restore the user's ability to authenticate and all previously retained data shall remain accessible.
+
+### REQ-ACCT-05
+The system shall allow an admin to change a user's role to student, teacher, or admin.
+
+### REQ-ACCT-06
+The system shall allow an admin to list all user accounts with filtering by role and status, with pagination (default page size: 20, maximum: 100).
+
+### REQ-ACCT-07
+The system shall allow an admin to view the question list of any user, including deactivated users, in read-only mode.
+
+### REQ-ACCT-08
+If a non-admin user attempts to access any `/api/admin/*` endpoint, then the system shall return a 403 Forbidden response.
+
+---
+
+## 十四、用户自管理
+
+### REQ-ME-01
+The system shall allow an authenticated user to retrieve their own profile (id, email, nickname, role, created_at).
+
+### REQ-ME-02
+The system shall allow an authenticated user to update their nickname (1–50 characters).
+
+### REQ-ME-03
+When an authenticated user submits a password change request with their current password and a new password (8–72 characters, at least one letter and one digit), the system shall update the credential via Cognito and return 204 No Content.
+
+### REQ-ME-04
+If the current password provided during a password change is incorrect, then the system shall return a 400 Bad Request response and shall not update the credential.
+
+### REQ-ME-05
+When an authenticated user confirms account self-deletion by providing their current password, the system shall deactivate the account, retain all associated data, and immediately invalidate the user's session tokens.
+
+### REQ-ME-06
+The system shall not allow a self-deleted account to be reactivated without admin intervention.
+
+---
+
+## 十五、学习统计看板
+
+### REQ-STATS-01
+The system shall allow a student to retrieve their learning statistics for a custom date range (maximum span: 365 days), including daily new question counts, per-subject mastery rates, and today's pending review count.
+
+### REQ-STATS-02
+The system shall compute per-subject mastery rate using an interval-weighted formula: each question's weight is `log2(current_interval_days + 1)`; questions with no review history contribute weight 0; the result is normalized to the range [0.0, 1.0].
+
+### REQ-STATS-03
+The system shall return today's pending review count as a single integer derived from the review schedule, without returning the full question list.
+
+### REQ-STATS-04
+If the requested date range exceeds 365 days, then the system shall truncate to 365 days from `date_from` and include a `truncated: true` flag in the response.
+
+### REQ-STATS-05
+The system shall allow a teacher or admin to retrieve a summary list of all students' statistics for a given date range, including question count, average mastery rate, today's pending review count, and last active date per student.
+
+### REQ-STATS-06
+The system shall allow a teacher or admin to retrieve the full statistics detail of any individual student, using the same structure as the student's own statistics response.
+
+### REQ-STATS-07
+If a student attempts to access `/api/stats/class/*`, then the system shall return a 403 Forbidden response.
+
+### REQ-STATS-08
+If a teacher or admin requests statistics for a user who does not exist or is not a student, then the system shall return a 404 Not Found response.
+
+---
+
+## 十六、班级管理
+
+### REQ-CLASS-01
+The system shall allow a teacher to create a named class; the system shall generate a unique 6-character alphanumeric invite code for the class.
+
+### REQ-CLASS-02
+The system shall allow a student to join a class by submitting a valid invite code; a student may belong to multiple classes simultaneously.
+
+### REQ-CLASS-03
+When a teacher resets a class invite code, the system shall generate a new unique code and immediately invalidate the previous code.
+
+### REQ-CLASS-04
+The system shall allow a teacher to view the member list of their own class and remove any student from it.
+
+### REQ-CLASS-05
+The system shall allow a student to leave a class voluntarily; leaving a class shall not delete the student's submitted task results.
+
+### REQ-CLASS-06
+If a user attempts to join a class with an invalid or expired invite code, then the system shall return a 404 Not Found response.
+
+### REQ-CLASS-07
+If a student attempts to create a class, delete a member, or reset an invite code, then the system shall return a 403 Forbidden response.
+
+---
+
+## 十七、班级任务
+
+### REQ-TASK-01
+The system shall allow a teacher to assign a review task to a class by selecting one of their own papers, with an optional due date.
+
+### REQ-TASK-02
+The system shall allow a student to view the task list for each of their classes, including each task's title, due date, and their own completion status.
+
+### REQ-TASK-03
+The system shall allow a student to submit pass or fail results for each question in a task; each (task, student, question) combination shall only be submitted once.
+
+### REQ-TASK-04
+When a student submits a task question result, the system shall update the student's personal Ebbinghaus review schedule for that question, following the same rules as REQ-SCHED-01.
+
+### REQ-TASK-05
+If a student attempts to submit results for a task that is closed or whose due date has passed, then the system shall return a 403 Forbidden response.
+
+### REQ-TASK-06
+If a student attempts to submit results for the same question in the same task more than once, then the system shall return a 409 Conflict response.
+
+### REQ-TASK-07
+The system shall allow a teacher to view per-student completion progress for any task in their class, including submitted count, total question count, and pass count per student.
+
+### REQ-TASK-08
+The system shall allow a teacher to update the due date of an active task or close it early; a closed task shall not accept further student submissions and shall not be reopened.
+
+---
+
+## 十八、非功能性需求
 
 ### REQ-NFR-01
 The system shall respond to all API requests (excluding PDF generation and recognition API calls) within 500 ms at the 95th percentile under normal load.
