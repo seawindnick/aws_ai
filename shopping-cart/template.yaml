@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Shopping Cart - Flask API + React Frontend on AWS Serverless
+
+Parameters:
+  FrontendBucketName:
+    Type: String
+    Description: S3 bucket name for frontend hosting (pre-created by workshop stack)
+    Default: ''
+
+Conditions:
+  CreateFrontendBucket: !Equals [!Ref FrontendBucketName, '']
+
+Globals:
+  Function:
+    Timeout: 15
+    Runtime: python3.12
+    MemorySize: 256
+    Architectures:
+      - arm64
+  Api:
+    Cors:
+      AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+      AllowHeaders: "'Content-Type'"
+      AllowOrigin: "'*'"
+
+Resources:
+  # ========================================
+  # DynamoDB Tables
+  # ========================================
+  ProductsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-products
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: productId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: productId
+          KeyType: HASH
+
+  CartTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-cart
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: productId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+        - AttributeName: productId
+          KeyType: RANGE
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${AWS::StackName}-orders
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: orderId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+        - AttributeName: orderId
+          KeyType: RANGE
+
+  # ========================================
+  # Lambda Function (Flask API behind API Gateway)
+  # ========================================
+  ShoppingCartFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: backend/
+      Handler: lambda_handler.handler
+      Environment:
+        Variables:
+          PRODUCTS_TABLE: !Ref ProductsTable
+          CART_TABLE: !Ref CartTable
+          ORDERS_TABLE: !Ref OrdersTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ProductsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CartTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+      Events:
+        ProxyApi:
+          Type: Api
+          Properties:
+            Path: /api/{proxy+}
+            Method: ANY
+        RootApi:
+          Type: Api
+          Properties:
+            Path: /api
+            Method: ANY
+
+  # ========================================
+  # S3 Bucket for React Frontend (only created if not provided)
+  # ========================================
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateFrontendBucket
+    Properties:
+      BucketName: !Sub ${AWS::StackName}-frontend-${AWS::AccountId}
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: CreateFrontendBucket
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub ${FrontendBucket.Arn}/*
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/api
+
+  FrontendUrl:
+    Description: Frontend website URL (open in browser)
+    Value: !If
+      - CreateFrontendBucket
+      - !GetAtt FrontendBucket.WebsiteURL
+      - !Sub http://${FrontendBucketName}.s3-website-${AWS::Region}.amazonaws.com
+
+  FrontendBucketName:
+    Description: S3 bucket name for frontend deployment
+    Value: !If
+      - CreateFrontendBucket
+      - !Ref FrontendBucket
+      - !Ref FrontendBucketName
