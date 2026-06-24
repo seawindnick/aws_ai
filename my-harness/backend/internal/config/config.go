@@ -28,6 +28,10 @@ type Config struct {
 	ImageDir string
 
 	ExternalTimeoutSec int
+
+	// 置信度阈值：>= AutoApprove 自动通过，< MinAccept 直接拒绝，中间段转人工审核
+	ConfidenceAutoApprove float64
+	ConfidenceMinAccept   float64
 }
 
 func Load() (*Config, error) {
@@ -44,9 +48,11 @@ func Load() (*Config, error) {
 		CognitoClientID:     mustEnv("COGNITO_CLIENT_ID"),
 		RecognitionAPIURL:   mustEnv("RECOGNITION_API_URL"),
 		RecognitionAPIKey:   mustEnv("RECOGNITION_API_KEY"),
-		BedrockModelID:      "claude-sonnet-4-6",
-		ImageDir:            getEnv("IMAGE_DIR", "/data/imgs"),
-		ExternalTimeoutSec:  15,
+		BedrockModelID:        "claude-sonnet-4-6",
+		ImageDir:              getEnv("IMAGE_DIR", "/data/imgs"),
+		ExternalTimeoutSec:    15,
+		ConfidenceAutoApprove: 0.85,
+		ConfidenceMinAccept:   0.50,
 	}
 	return cfg, nil
 }

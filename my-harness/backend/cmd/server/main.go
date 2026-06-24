@@ -61,14 +61,16 @@ func main() {
 	// services
 	recognitionSvc := service.NewRecognitionService(cfg.RecognitionAPIURL, cfg.RecognitionAPIKey, cfg.ExternalTimeoutSec)
 	bedrockSvc := service.NewBedrockService(bedrockClient, cfg.BedrockModelID, cfg.ExternalTimeoutSec)
-	questionSvc := service.NewQuestionService(questionRepo, recognitionSvc, cfg.ImageDir)
+	questionSvc := service.NewQuestionService(questionRepo, recognitionSvc, cfg)
 	reviewSvc := service.NewReviewService(reviewRepo)
+	reviewQueueSvc := service.NewReviewQueueService(questionRepo)
 	exportSvc := service.NewExportService(questionRepo, cfg.ImageDir+"/exports")
 
 	// handlers
 	authH := handler.NewAuthHandler(cognitoClient, cfg.CognitoClientID, cfg.CognitoUserPoolID, userRepo)
 	questionH := handler.NewQuestionHandler(questionSvc)
 	reviewH := handler.NewReviewHandler(reviewSvc)
+	reviewQueueH := handler.NewReviewQueueHandler(reviewQueueSvc)
 	recommendH := handler.NewRecommendHandler(bedrockSvc, errorRepo)
 	exportH := handler.NewExportHandler(exportSvc)
 
@@ -99,6 +101,14 @@ func main() {
 			r.Get("/", questionH.List)
 			r.Get("/{id}", questionH.Get)
 			r.Delete("/{id}", questionH.Delete)
+			r.Patch("/{id}/category", questionH.UpdateCategory)
+		})
+
+		// 审核队列：仅 teacher / admin 可访问
+		r.Group(func(r chi.Router) {
+			r.Use(middleware.RequireRole("teacher", "admin"))
+			r.Get("/api/review-queue", reviewQueueH.ListPending)
+			r.Post("/api/review-queue/{id}/review", reviewQueueH.Review)
 		})
 
 		r.Route("/api/review", func(r chi.Router) {
