@@ -263,125 +263,127 @@ TTL:            Unix 时间戳（next_review_at + 30天）
 
 ## 四、API 路由
 
+> 规则：只使用 GET / POST 两种方法。资源 ID 通过请求体（POST）或 Query 参数（GET）传递，不放在路径中。
+
 ### 认证（公开）
 ```
-POST /api/auth/register
-POST /api/auth/login
-POST /api/auth/refresh
+POST /api/auth/register          body: {email, password, nickname}
+POST /api/auth/login             body: {email, password}
+POST /api/auth/refresh           body: {refresh_token}
 ```
 
 ### 用户自管理（需登录）
 ```
-GET    /api/me
-PATCH  /api/me/nickname
-POST   /api/me/password
-DELETE /api/me
+GET  /api/me                     返回当前用户信息
+POST /api/me/nickname            body: {nickname}
+POST /api/me/password            body: {old_password, new_password}
+POST /api/me/deactivate          body: {password}  注销账号
 ```
 
 ### 题目（需登录）
 ```
-POST   /api/questions           上传单张
-POST   /api/questions/batch     批量上传
-GET    /api/questions           列表
-GET    /api/questions/search    多维搜索
-GET    /api/questions/:id       详情
-DELETE /api/questions/:id       删除
-PATCH  /api/questions/:id/category  修改分类
+POST /api/questions/upload       body: multipart  上传单张图片
+POST /api/questions/batch        body: multipart  批量上传
+GET  /api/questions/list         query: subject, status, page, page_size
+GET  /api/questions/search       query: subject, tag, category, keyword, date_from, date_to
+GET  /api/questions/detail       query: id
+POST /api/questions/delete       body: {id}
+POST /api/questions/category     body: {id, category}
 ```
 
 ### 标签（需登录）
 ```
-GET    /api/questions/:id/tags
-POST   /api/questions/:id/tags
-POST   /api/questions/:id/tags/:tid/confirm
-DELETE /api/questions/:id/tags/:tid
+GET  /api/tags/list              query: question_id
+POST /api/tags/add               body: {question_id, name}
+POST /api/tags/confirm           body: {tag_id}
+POST /api/tags/delete            body: {tag_id}
 ```
 
 ### 试卷（需登录）
 ```
-POST   /api/papers
-GET    /api/papers
-GET    /api/papers/:id
-PATCH  /api/papers/:id
-DELETE /api/papers/:id
-POST   /api/papers/:id/questions
-DELETE /api/papers/:id/questions/:qid
-PUT    /api/papers/:id/reorder
-GET    /api/papers/:id/questions
-POST   /api/papers/:id/duplicate
-POST   /api/papers/:id/export
+POST /api/papers/create          body: {title}
+GET  /api/papers/list            query: page, page_size
+GET  /api/papers/detail          query: id
+POST /api/papers/rename          body: {id, title}
+POST /api/papers/delete          body: {id}
+POST /api/papers/add-question    body: {paper_id, question_id, position}
+POST /api/papers/remove-question body: {paper_id, question_id}
+POST /api/papers/reorder         body: {paper_id, positions:[{question_id, position}]}
+GET  /api/papers/questions       query: paper_id
+POST /api/papers/duplicate       body: {paper_id}
+POST /api/papers/export          body: {paper_id}
 ```
 
 ### 复习调度（需登录）
 ```
-GET  /api/review/today
-POST /api/review/:id/result
+GET  /api/review/today           今日待复习题目列表
+POST /api/review/submit          body: {question_id, result}  pass/fail
 ```
 
 ### 错题记录（需登录）
 ```
-GET /api/error-records
+GET  /api/error-records/list     query: page, page_size
 ```
 
 ### 通知（需登录）
 ```
-GET  /api/notifications
-POST /api/notifications/read-all
-POST /api/notifications/:id/read
+GET  /api/notifications/list     query: unread, page, page_size
+POST /api/notifications/read     body: {id}
+POST /api/notifications/read-all 无 body
 ```
 
 ### 统计（需登录）
 ```
-GET /api/stats/me?date_from=&date_to=
-GET /api/stats/class?date_from=&date_to=          （teacher/admin）
-GET /api/stats/class/:student_id?date_from=&date_to=  （teacher/admin）
+GET  /api/stats/me               query: date_from, date_to
+GET  /api/stats/class            query: date_from, date_to          （teacher/admin）
+GET  /api/stats/student          query: student_id, date_from, date_to  （teacher/admin）
 ```
 
 ### AI 推荐（需登录）
 ```
-GET /api/recommend
+GET  /api/recommend              返回最多 5 条推荐题目
 ```
 
 ### 导出（需登录）
 ```
-POST /api/export/pdf
+POST /api/export/pdf             body: {subject}  按科目批量导出
 ```
 
 ### 人工审核（teacher/admin）
 ```
-GET  /api/review-queue
-POST /api/review-queue/:id/review
+GET  /api/review-queue/list      query: page, page_size
+POST /api/review-queue/submit    body: {question_id, action, category, note}
 ```
 
 ### 管理员（admin）
 ```
-POST   /api/admin/users
-POST   /api/admin/users/import
-GET    /api/admin/users
-PATCH  /api/admin/users/:id/status
-PATCH  /api/admin/users/:id/role
-GET    /api/admin/users/:id/questions
+POST /api/admin/users/create     body: {email, role}
+POST /api/admin/users/import     body: multipart CSV
+GET  /api/admin/users/list       query: role, status, page, page_size
+POST /api/admin/users/status     body: {user_id, status}
+POST /api/admin/users/role       body: {user_id, role}
+GET  /api/admin/users/questions  query: user_id, page, page_size
 ```
 
 ### 班级（需登录）
 ```
-POST   /api/classes                          （teacher）
-GET    /api/classes
-GET    /api/classes/:id
-DELETE /api/classes/:id/members/:uid         （teacher）
-POST   /api/classes/:id/invite-code/reset    （teacher）
-POST   /api/classes/join                     （student）
-DELETE /api/classes/:id/me                   （student）
+POST /api/classes/create         body: {name}                        （teacher）
+GET  /api/classes/list           我的班级列表
+GET  /api/classes/detail         query: class_id
+POST /api/classes/remove-member  body: {class_id, user_id}           （teacher）
+POST /api/classes/reset-code     body: {class_id}                    （teacher）
+POST /api/classes/join           body: {invite_code}                  （student）
+POST /api/classes/leave          body: {class_id}                    （student）
 ```
 
 ### 任务（需登录）
 ```
-POST  /api/classes/:id/tasks                 （teacher）
-GET   /api/classes/:id/tasks
-PATCH /api/classes/:id/tasks/:tid            （teacher）
-GET   /api/classes/:id/tasks/:tid/progress   （teacher）
-GET   /api/classes/:id/tasks/:tid
-POST  /api/classes/:id/tasks/:tid/submit     （student）
+POST /api/tasks/create           body: {class_id, paper_id, title, due_at}  （teacher）
+GET  /api/tasks/list             query: class_id
+POST /api/tasks/update           body: {task_id, due_at, status}             （teacher）
+GET  /api/tasks/progress         query: task_id                              （teacher）
+GET  /api/tasks/detail           query: task_id
+POST /api/tasks/submit           body: {task_id, results:[{question_id, result}]}  （student）
 ```
 
 ---
