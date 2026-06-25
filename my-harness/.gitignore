@@ -1,0 +1,25 @@
+# Lambda binaries
+lambda/*/dist/bootstrap
+
+# Go build artifacts
+*.test
+*.out
+
+# Node.js
+node_modules/
+infra/package-lock.json
+infra/cdk.out/
+infra/cdk.context.json
+
+# Go sum files (keep go.sum for reproducibility but ignore dist)
+# Secrets / env
+.env
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

@@ -37,7 +37,11 @@ func (s *ExportService) ExportByFilter(ctx context.Context, userID, subject stri
 	if len(questions) == 0 {
 		return "", fmt.Errorf("no approved questions found for export")
 	}
-	return s.renderPDF(questions, "Wrong Question Summary")
+	outPath := filepath.Join(s.exportDir, userID+"-filter.pdf")
+	if err := s.renderPDF(questions, "Wrong Question Summary", outPath); err != nil {
+		return "", err
+	}
+	return outPath, nil
 }
 
 // ExportPaper 按试卷导出 PDF，跳过非 approved 题目并报告（REQ-PAPER-07）。

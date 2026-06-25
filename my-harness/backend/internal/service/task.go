@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -113,8 +114,7 @@ func (s *TaskService) Submit(ctx context.Context, userID, taskID string, results
 		}
 		// trigger Ebbinghaus schedule update
 		if err := s.reviewSvc.SubmitResult(ctx, userID, item.QuestionID, item.Result); err != nil {
-			// log but don't fail the submission
-			fmt.Printf("WARN: review schedule update failed for %s: %v\n", item.QuestionID, err)
+			slog.Warn("review schedule update failed", "question_id", item.QuestionID, "error", err)
 		}
 		out.Succeeded = append(out.Succeeded, item.QuestionID)
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/workshop/wrong-question/internal/model"
@@ -61,10 +62,9 @@ func (s *ReviewQueueService) Review(ctx context.Context, questionID, reviewerID 
 		return fmt.Errorf("save review result: %w", err)
 	}
 
-	// 通知题目所有者（REQ-REVIEW-06）
+	// 通知题目所有者（REQ-REVIEW-06）；通知失败不回滚审核结果（弱依赖）
 	if err := s.notifSvc.NotifyQuestionReviewed(ctx, q.UserID, questionID, newStatus); err != nil {
-		// 通知失败不回滚审核结果，记录错误向上传播
-		return fmt.Errorf("send review notification: %w", err)
+		slog.Warn("send review notification failed", "question_id", questionID, "error", err)
 	}
 
 	return nil

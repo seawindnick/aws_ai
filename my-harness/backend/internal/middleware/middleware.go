@@ -1,13 +1,12 @@
 package middleware
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/workshop/wrong-question/internal/apperr"
-	"github.com/workshop/wrong-question/internal/handler"
 )
 
 type responseWriter struct {
@@ -43,9 +42,15 @@ func Recovery(next http.Handler) http.Handler {
 		defer func() {
 			if rec := recover(); rec != nil {
 				slog.Error("panic recovered", "error", rec)
-				handler.WriteError(w, apperr.ErrInternal)
+				writeErrorJSON(w, http.StatusInternalServerError, "internal server error")
 			}
 		}()
 		next.ServeHTTP(w, r)
 	})
+}
+
+func writeErrorJSON(w http.ResponseWriter, code int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }

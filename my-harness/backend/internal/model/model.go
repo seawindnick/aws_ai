@@ -55,6 +55,7 @@ type Question struct {
 	ImagePath  string           `json:"image_path"  db:"image_path"`
 	RawText    string           `json:"raw_text"    db:"raw_text"`
 	Subject    string           `json:"subject"     db:"subject"`
+	TopicTags  []string         `json:"topic_tags"  db:"-"`
 	Source     string           `json:"source"      db:"source"`
 	Status     QuestionStatus   `json:"status"      db:"status"`
 	Category   QuestionCategory `json:"category"    db:"category"`
@@ -63,6 +64,13 @@ type Question struct {
 	ReviewedBy string           `json:"reviewed_by" db:"reviewed_by"`
 	ReviewedAt *time.Time       `json:"reviewed_at" db:"reviewed_at"`
 	CreatedAt  time.Time        `json:"created_at"  db:"created_at"`
+}
+
+// QuestionDetail enriches Question with fields computed at query time.
+type QuestionDetail struct {
+	*Question
+	HasConfirmedTags bool `json:"has_confirmed_tags"`
+	CategoryPrompt   bool `json:"category_prompt"`
 }
 
 // TagStatus 标签状态

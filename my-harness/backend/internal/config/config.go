@@ -52,11 +52,11 @@ func Load() (*Config, error) {
 		AWSRegion:             mustEnv("AWS_REGION"),
 		CognitoUserPoolID:     mustEnv("COGNITO_USER_POOL_ID"),
 		CognitoClientID:       mustEnv("COGNITO_CLIENT_ID"),
-		RecognitionAPIURL:     mustEnv("RECOGNITION_API_URL"),
-		RecognitionAPIKey:     mustEnv("RECOGNITION_API_KEY"),
+		RecognitionAPIURL:     getEnv("RECOGNITION_API_URL", ""),
+		RecognitionAPIKey:     getEnv("RECOGNITION_API_KEY", ""),
 		BedrockModelID:        getEnv("BEDROCK_MODEL_ID", "claude-sonnet-4-6"),
 		EmbeddingModelID:      getEnv("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0"),
-		S3VectorsBucket:       mustEnv("S3_VECTORS_BUCKET"),
+		S3VectorsBucket:       getEnv("S3_VECTORS_BUCKET", ""),
 		ImageDir:              getEnv("IMAGE_DIR", "/data/imgs"),
 		ExportDir:             getEnv("EXPORT_DIR", "/data/exports"),
 		ExternalTimeoutSec:    getEnvInt("EXTERNAL_TIMEOUT_SEC", 30),
@@ -67,7 +67,7 @@ func Load() (*Config, error) {
 }
 
 func (c *Config) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC",
+	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=UTC&timeout=10s&readTimeout=30s&writeTimeout=30s",
 		c.DBUser, c.DBPassword, c.DBHost, c.DBPort, c.DBName)
 }
 

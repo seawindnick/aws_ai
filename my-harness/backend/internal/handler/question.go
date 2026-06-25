@@ -64,6 +64,7 @@ func (h *QuestionHandler) List(w http.ResponseWriter, r *http.Request) {
 		WriteError(w, apperr.ErrUnauthorized)
 		return
 	}
+	role, _ := middleware.RoleFromCtx(r.Context())
 
 	subject := r.URL.Query().Get("subject")
 	status := model.QuestionStatus(r.URL.Query().Get("status"))
@@ -76,7 +77,7 @@ func (h *QuestionHandler) List(w http.ResponseWriter, r *http.Request) {
 		pageSize = 20
 	}
 
-	questions, err := h.svc.List(r.Context(), userID, subject, status, page, pageSize)
+	questions, err := h.svc.List(r.Context(), userID, subject, status, page, pageSize, role)
 	if err != nil {
 		WriteError(w, err)
 		return
@@ -205,7 +206,8 @@ func (h *QuestionHandler) Search(w http.ResponseWriter, r *http.Request) {
 		PageSize: pageSize,
 	}
 
-	questions, err := h.svc.Search(r.Context(), params)
+	role, _ := middleware.RoleFromCtx(r.Context())
+	questions, err := h.svc.Search(r.Context(), params, role)
 	if err != nil {
 		WriteError(w, err)
 		return

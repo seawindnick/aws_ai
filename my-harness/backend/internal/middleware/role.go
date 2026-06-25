@@ -2,9 +2,6 @@ package middleware
 
 import (
 	"net/http"
-
-	"github.com/workshop/wrong-question/internal/apperr"
-	"github.com/workshop/wrong-question/internal/handler"
 )
 
 // RequireRole 校验当前用户角色，不符合则返回 403。
@@ -19,11 +16,11 @@ func RequireRole(allowedRoles ...string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			role, ok := r.Context().Value(roleKey).(string)
 			if !ok || role == "" {
-				handler.WriteError(w, apperr.ErrForbidden)
+				writeErrorJSON(w, http.StatusForbidden, "forbidden")
 				return
 			}
 			if _, permitted := allowed[role]; !permitted {
-				handler.WriteError(w, apperr.ErrForbidden)
+				writeErrorJSON(w, http.StatusForbidden, "forbidden")
 				return
 			}
 			next.ServeHTTP(w, r)

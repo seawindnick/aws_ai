@@ -6,15 +6,15 @@ import (
 
 	"github.com/workshop/wrong-question/internal/apperr"
 	"github.com/workshop/wrong-question/internal/middleware"
-	"github.com/workshop/wrong-question/internal/repository"
+	"github.com/workshop/wrong-question/internal/service"
 )
 
 type ErrorRecordHandler struct {
-	repo *repository.ErrorRecordRepo
+	svc *service.ErrorRecordService
 }
 
-func NewErrorRecordHandler(repo *repository.ErrorRecordRepo) *ErrorRecordHandler {
-	return &ErrorRecordHandler{repo: repo}
+func NewErrorRecordHandler(svc *service.ErrorRecordService) *ErrorRecordHandler {
+	return &ErrorRecordHandler{svc: svc}
 }
 
 func (h *ErrorRecordHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -31,7 +31,7 @@ func (h *ErrorRecordHandler) List(w http.ResponseWriter, r *http.Request) {
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	records, err := h.repo.ListByUser(r.Context(), userID, page, pageSize)
+	records, err := h.svc.List(r.Context(), userID, page, pageSize)
 	if err != nil {
 		WriteError(w, err)
 		return

@@ -138,6 +138,19 @@ func (s *StatsService) computeMastery(ctx context.Context, userID string) ([]Sub
 	if err != nil {
 		return nil, err
 	}
+	if len(questions) == 0 {
+		return nil, nil
+	}
+
+	// Collect all question IDs and batch-fetch schedules to avoid N+1 DynamoDB calls.
+	ids := make([]string, 0, len(questions))
+	for _, q := range questions {
+		ids = append(ids, q.ID)
+	}
+	intervalByID, err := s.reviewRepo.BatchGetSchedules(ctx, userID, ids)
+	if err != nil {
+		return nil, fmt.Errorf("batch get schedules: %w", err)
+	}
 
 	type subjectAgg struct {
 		totalWeight float64
@@ -153,13 +166,9 @@ func (s *StatsService) computeMastery(ctx context.Context, userID string) ([]Sub
 			bySubject[q.Subject] = agg
 		}
 		agg.count++
-
-		sched, err := s.reviewRepo.GetSchedule(ctx, userID, q.ID)
-		if err != nil || sched == nil {
-			continue
+		if interval, found := intervalByID[q.ID]; found && interval > 0 {
+			agg.totalWeight += math.Log2(float64(interval) + 1)
 		}
-		w := math.Log2(float64(sched.IntervalDays) + 1)
-		agg.totalWeight += w
 	}
 
 	var result []SubjectMastery

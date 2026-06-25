@@ -2,11 +2,11 @@ package repository
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
+	s3vdoc "github.com/aws/aws-sdk-go-v2/service/s3vectors/document"
 	s3vtypes "github.com/aws/aws-sdk-go-v2/service/s3vectors/types"
 )
 
@@ -19,29 +19,20 @@ func NewS3VectorsRepo(client *s3vectors.Client, bucketName string) *S3VectorsRep
 	return &S3VectorsRepo{client: client, bucketName: bucketName}
 }
 
-type VectorMetadata struct {
-	UserID  string `json:"user_id"`
-	Subject string `json:"subject"`
-}
-
 func (r *S3VectorsRepo) Put(ctx context.Context, questionID, userID, subject string, vector []float64) error {
-	meta, err := json.Marshal(VectorMetadata{UserID: userID, Subject: subject})
-	if err != nil {
-		return fmt.Errorf("marshal metadata: %w", err)
-	}
+	f32 := toFloat32(vector)
+	meta := s3vdoc.NewLazyDocument(map[string]any{
+		"user_id": userID,
+		"subject": subject,
+	})
 
-	f32 := make([]float32, len(vector))
-	for i, v := range vector {
-		f32[i] = float32(v)
-	}
-
-	_, err = r.client.PutVectors(ctx, &s3vectors.PutVectorsInput{
+	_, err := r.client.PutVectors(ctx, &s3vectors.PutVectorsInput{
 		VectorBucketName: aws.String(r.bucketName),
 		Vectors: []s3vtypes.PutInputVector{
 			{
 				Key:      aws.String(questionID),
 				Data:     &s3vtypes.VectorDataMemberFloat32{Value: f32},
-				Metadata: &s3vtypes.DocumentMemberString{Value: string(meta)},
+				Metadata: meta,
 			},
 		},
 	})
@@ -57,23 +48,29 @@ type VectorResult struct {
 }
 
 func (r *S3VectorsRepo) Query(ctx context.Context, userID, subject string, vector []float64, k int) ([]*VectorResult, error) {
-	f32 := make([]float32, len(vector))
-	for i, v := range vector {
-		f32[i] = float32(v)
-	}
+	f32 := toFloat32(vector)
 
-	// Build metadata filter: user_id must match; optionally filter subject
-	filterExpr := fmt.Sprintf(`{"user_id": {"$eq": %q}}`, userID)
+	// Build metadata filter using document.NewLazyDocument
+	var filterMap map[string]any
 	if subject != "" {
-		filterExpr = fmt.Sprintf(`{"$and": [{"user_id": {"$eq": %q}}, {"subject": {"$eq": %q}}]}`, userID, subject)
+		filterMap = map[string]any{
+			"$and": []any{
+				map[string]any{"user_id": map[string]any{"$eq": userID}},
+				map[string]any{"subject": map[string]any{"$eq": subject}},
+			},
+		}
+	} else {
+		filterMap = map[string]any{
+			"user_id": map[string]any{"$eq": userID},
+		}
 	}
 
 	out, err := r.client.QueryVectors(ctx, &s3vectors.QueryVectorsInput{
 		VectorBucketName: aws.String(r.bucketName),
 		QueryVector:      &s3vtypes.VectorDataMemberFloat32{Value: f32},
 		TopK:             aws.Int32(int32(k)),
-		Filter:           &s3vtypes.DocumentMemberString{Value: filterExpr},
-		ReturnDistance:   aws.Bool(true),
+		Filter:           s3vdoc.NewLazyDocument(filterMap),
+		ReturnDistance:   true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("query vectors: %w", err)
@@ -106,4 +103,12 @@ func (r *S3VectorsRepo) Delete(ctx context.Context, questionID string) error {
 		return fmt.Errorf("delete vector: %w", err)
 	}
 	return nil
+}
+
+func toFloat32(v []float64) []float32 {
+	f32 := make([]float32, len(v))
+	for i, x := range v {
+		f32[i] = float32(x)
+	}
+	return f32
 }

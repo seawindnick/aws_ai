@@ -119,22 +119,24 @@ func (h *TaskHandler) Submit(w http.ResponseWriter, r *http.Request) {
 		Result     model.ReviewResult
 	}, 0, len(body.Results))
 	for _, item := range body.Results {
-		r := model.ReviewResult(item.Result)
-		if r != model.ReviewPass && r != model.ReviewFail {
+		res := model.ReviewResult(item.Result)
+		if res != model.ReviewPass && res != model.ReviewFail {
 			WriteError(w, apperr.BadRequest("result must be pass or fail"))
 			return
 		}
 		items = append(items, struct {
 			QuestionID string
 			Result     model.ReviewResult
-		}{QuestionID: item.QuestionID, Result: r})
+		}{QuestionID: item.QuestionID, Result: res})
 	}
 
 	result, err := h.svc.Submit(r.Context(), userID, body.TaskID, items)
 	if err != nil {
 		msg := err.Error()
-		if msg == "task is closed" || msg == "task due date has passed" {
-			WriteError(w, apperr.Forbidden(msg))
+		if msg == "task is closed" {
+			WriteError(w, apperr.New(409, msg))
+		} else if msg == "task due date has passed" {
+			WriteError(w, apperr.New(409, msg))
 		} else {
 			WriteError(w, err)
 		}

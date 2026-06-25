@@ -56,6 +56,51 @@ func (r *ReviewRepo) GetSchedule(ctx context.Context, userID, questionID string)
 	return s, nil
 }
 
+// BatchGetSchedules returns a map[questionID]IntervalDays for the given question IDs.
+// Uses DynamoDB BatchGetItem (max 100 per call) to avoid N+1 per-question lookups.
+func (r *ReviewRepo) BatchGetSchedules(ctx context.Context, userID string, questionIDs []string) (map[string]int, error) {
+	result := make(map[string]int, len(questionIDs))
+	if len(questionIDs) == 0 {
+		return result, nil
+	}
+
+	// DynamoDB BatchGetItem limit: 100 keys per call
+	const batchSize = 100
+	for start := 0; start < len(questionIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(questionIDs) {
+			end = len(questionIDs)
+		}
+		batch := questionIDs[start:end]
+
+		keys := make([]map[string]types.AttributeValue, 0, len(batch))
+		for _, qid := range batch {
+			keys = append(keys, map[string]types.AttributeValue{
+				"user_id":     &types.AttributeValueMemberS{Value: userID},
+				"question_id": &types.AttributeValueMemberS{Value: qid},
+			})
+		}
+
+		out, err := r.ddb.BatchGetItem(ctx, &dynamodb.BatchGetItemInput{
+			RequestItems: map[string]types.KeysAndAttributes{
+				r.tableName: {Keys: keys},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("batch get schedules: %w", err)
+		}
+
+		for _, item := range out.Responses[r.tableName] {
+			s := &model.ReviewSchedule{}
+			if err := attributevalue.UnmarshalMap(item, s); err != nil {
+				continue
+			}
+			result[s.QuestionID] = s.IntervalDays
+		}
+	}
+	return result, nil
+}
+
 func (r *ReviewRepo) SaveSchedule(ctx context.Context, s *model.ReviewSchedule) error {
 	item, err := attributevalue.MarshalMap(s)
 	if err != nil {
@@ -67,6 +112,20 @@ func (r *ReviewRepo) SaveSchedule(ctx context.Context, s *model.ReviewSchedule) 
 	})
 	if err != nil {
 		return fmt.Errorf("put schedule: %w", err)
+	}
+	return nil
+}
+
+func (r *ReviewRepo) DeleteSchedule(ctx context.Context, userID, questionID string) error {
+	_, err := r.ddb.DeleteItem(ctx, &dynamodb.DeleteItemInput{
+		TableName: &r.tableName,
+		Key: map[string]types.AttributeValue{
+			"user_id":     &types.AttributeValueMemberS{Value: userID},
+			"question_id": &types.AttributeValueMemberS{Value: questionID},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("delete schedule: %w", err)
 	}
 	return nil
 }

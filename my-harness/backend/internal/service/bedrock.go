@@ -90,7 +90,12 @@ func (s *BedrockService) Recommend(ctx context.Context, errorSummary string) ([]
 		if item.Reason == "" {
 			return nil, fmt.Errorf("bedrock recommendation missing reason")
 		}
-		// confidence 缺失时按 0 处理（已由 JSON 零值保证）
+		// confidence 缺失时零值已为 0；超出范围截断到 [0.0, 1.0]（R2）
+		if item.Confidence < 0 {
+			item.Confidence = 0
+		} else if item.Confidence > 1 {
+			item.Confidence = 1
+		}
 	}
 
 	return items, nil

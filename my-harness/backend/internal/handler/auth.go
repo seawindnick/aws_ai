@@ -67,7 +67,6 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		CognitoSub: aws.ToString(out.UserSub),
 		Email:      body.Email,
 		Role:       model.RoleStudent,
-		SchoolName: body.SchoolName,
 		CreatedAt:  time.Now().UTC(),
 	}
 	if err := h.userRepo.Create(r.Context(), user); err != nil {

@@ -31,6 +31,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Start a minimal HTTP server immediately so ECS health checks pass
+	// while the full stack is initialising (MySQL, AWS SDKs, etc.)
+	ready := make(chan struct{})
+	earlyMux := http.NewServeMux()
+	earlyMux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-ready:
+			w.WriteHeader(http.StatusOK)
+		default:
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}
+	})
+	earlyServer := &http.Server{Addr: ":" + cfg.Port, Handler: earlyMux}
+	go func() {
+		if err := earlyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slog.Error("early health server", "error", err)
+		}
+	}()
+
 	ctx := context.Background()
 
 	mysqlDB, err := db.NewMySQL(ctx, cfg)
@@ -69,7 +88,7 @@ func main() {
 	embedSvc := service.NewEmbeddingService(bedrockClient, cfg.EmbeddingModelID, cfg.ExternalTimeoutSec)
 	embedJobSvc := service.NewEmbeddingJobService(ddbClient, cfg.DynamoTableEmbedJobs)
 	notifSvc := service.NewNotificationService(notifRepo)
-	questionSvc := service.NewQuestionService(questionRepo, tagRepo, recognitionSvc, embedJobSvc, cfg)
+	questionSvc := service.NewQuestionService(questionRepo, tagRepo, recognitionSvc, embedJobSvc, s3vRepo, reviewRepo, cfg)
 	tagSvc := service.NewTagService(tagRepo, questionRepo)
 	paperSvc := service.NewPaperService(paperRepo, questionRepo)
 	reviewSvc := service.NewReviewService(reviewRepo, errorRepo)
@@ -81,6 +100,8 @@ func main() {
 	classSvc := service.NewClassService(classRepo)
 	taskSvc := service.NewTaskService(taskRepo, classRepo, reviewSvc)
 	semanticSvc := service.NewSemanticSearchService(embedSvc, s3vRepo, questionRepo)
+	recommendSvc := service.NewRecommendService(bedrockSvc, errorRepo)
+	errorRecordSvc := service.NewErrorRecordService(errorRepo)
 
 	// handlers
 	authH := handler.NewAuthHandler(cognitoClient, cfg.CognitoClientID, cfg.CognitoUserPoolID, userRepo)
@@ -90,14 +111,14 @@ func main() {
 	notifH := handler.NewNotificationHandler(notifSvc)
 	reviewH := handler.NewReviewHandler(reviewSvc)
 	reviewQueueH := handler.NewReviewQueueHandler(reviewQueueSvc)
-	recommendH := handler.NewRecommendHandler(bedrockSvc, errorRepo)
+	recommendH := handler.NewRecommendHandler(recommendSvc)
 	exportH := handler.NewExportHandler(exportSvc)
 	meH := handler.NewMeHandler(meSvc)
 	adminH := handler.NewAdminHandler(adminSvc, questionSvc)
 	statsH := handler.NewStatsHandler(statsSvc)
 	classH := handler.NewClassHandler(classSvc)
 	taskH := handler.NewTaskHandler(taskSvc)
-	errorRecordH := handler.NewErrorRecordHandler(errorRepo)
+	errorRecordH := handler.NewErrorRecordHandler(errorRecordSvc)
 	semanticH := handler.NewSemanticSearchHandler(semanticSvc)
 
 	r := chi.NewRouter()
@@ -242,8 +263,11 @@ func main() {
 		r.Post("/api/export/pdf", exportH.ExportPDF)
 	})
 
-	// serve uploaded images
-	r.Handle("/images/*", http.StripPrefix("/images/", http.FileServer(http.Dir(cfg.ImageDir))))
+	// serve uploaded images — auth-gated so users can only see files under their own userID prefix
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.CognitoJWTAuth(cfg.AWSRegion, cfg.CognitoUserPoolID, userRepo))
+		r.Get("/images/{userID}/*", handler.ServeImage(cfg.ImageDir))
+	})
 
 	slog.Info("server starting", "port", cfg.Port)
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {

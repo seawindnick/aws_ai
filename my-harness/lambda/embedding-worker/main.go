@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -18,16 +17,15 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3vectors"
+	s3vdoc "github.com/aws/aws-sdk-go-v2/service/s3vectors/document"
 	s3vtypes "github.com/aws/aws-sdk-go-v2/service/s3vectors/types"
-	_ "github.com/go-sql-driver/mysql"
 )
 
 var (
 	ddbClient      *dynamodb.Client
 	bedrockClient  *bedrockruntime.Client
 	s3vClient      *s3vectors.Client
-	db             *sql.DB
-	embedJobsTable string
+	questionsTable string
 	vectorBucket   string
 	embeddingModel string
 )
@@ -44,71 +42,54 @@ func init() {
 	bedrockClient = bedrockruntime.NewFromConfig(cfg)
 	s3vClient = s3vectors.NewFromConfig(cfg)
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?parseTime=True&loc=UTC",
-		mustEnv("DB_USER"), mustEnv("DB_PASSWORD"),
-		mustEnv("DB_HOST"), getEnv("DB_PORT", "3306"),
-		mustEnv("DB_NAME"),
-	)
-	db, err = sql.Open("mysql", dsn)
-	if err != nil {
-		slog.Error("open mysql", "error", err)
-		os.Exit(1)
-	}
-
-	embedJobsTable = mustEnv("DYNAMO_TABLE_EMBED_JOBS")
-	vectorBucket = mustEnv("S3_VECTORS_BUCKET")
+	questionsTable = mustEnv("DYNAMO_TABLE_QUESTIONS")
+	vectorBucket = getEnv("S3_VECTORS_BUCKET", "")
 	embeddingModel = getEnv("EMBEDDING_MODEL_ID", "amazon.titan-embed-text-v2:0")
 }
 
 func handler(ctx context.Context, event events.DynamoDBEvent) error {
 	for _, record := range event.Records {
-		if record.EventName != "INSERT" {
+		// Only process MODIFY events — fired when image-analyzer sets status=done
+		if record.EventName != "MODIFY" {
 			continue
 		}
 
-		var job struct {
-			QuestionID string `dynamodbav:"question_id"`
-			UserID     string `dynamodbav:"user_id"`
-			Status     string `dynamodbav:"status"`
-			RetryCount int    `dynamodbav:"retry_count"`
-		}
-
-		// Convert events.DynamoDBAttributeValue map to SDK types
+		// Convert events.DynamoDBAttributeValue map to SDK types for unmarshalling
 		av := make(map[string]types.AttributeValue)
 		for k, v := range record.Change.NewImage {
 			av[k] = convertAttrValue(v)
 		}
-		if err := attributevalue.UnmarshalMap(av, &job); err != nil {
-			slog.Error("unmarshal job", "error", err)
+
+		var q struct {
+			QuestionID string `dynamodbav:"question_id"`
+			UserID     string `dynamodbav:"user_id"`
+			Subject    string `dynamodbav:"subject"`
+			RawText    string `dynamodbav:"raw_text"`
+			Status     string `dynamodbav:"status"`
+		}
+		if err := attributevalue.UnmarshalMap(av, &q); err != nil {
+			slog.Error("unmarshal question", "error", err)
 			continue
 		}
 
-		if job.Status != "pending" {
+		if q.Status != "done" || q.RawText == "" {
 			continue
 		}
 
-		if err := processJob(ctx, job.QuestionID, job.UserID, job.RetryCount); err != nil {
-			slog.Error("process embedding job", "question_id", job.QuestionID, "error", err)
-			updateJobStatus(ctx, job.QuestionID, "failed", job.RetryCount+1)
+		if vectorBucket == "" {
+			slog.Warn("S3_VECTORS_BUCKET not set, skipping embedding", "question_id", q.QuestionID)
+			continue
+		}
+
+		if err := embedQuestion(ctx, q.QuestionID, q.UserID, q.Subject, q.RawText); err != nil {
+			slog.Error("embed question", "question_id", q.QuestionID, "error", err)
+			markEmbedStatus(ctx, q.QuestionID, "embed_failed")
 		}
 	}
 	return nil
 }
 
-func processJob(ctx context.Context, questionID, userID string, retryCount int) error {
-	if retryCount >= 3 {
-		slog.Warn("max retries reached", "question_id", questionID)
-		return nil
-	}
-
-	var rawText, subject string
-	err := db.QueryRowContext(ctx,
-		`SELECT raw_text, subject FROM questions WHERE id = ?`, questionID,
-	).Scan(&rawText, &subject)
-	if err != nil {
-		return fmt.Errorf("read question: %w", err)
-	}
-
+func embedQuestion(ctx context.Context, questionID, userID, subject, rawText string) error {
 	body, _ := json.Marshal(map[string]string{"inputText": rawText})
 	out, err := bedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
 		ModelId:     aws.String(embeddingModel),
@@ -126,14 +107,16 @@ func processJob(ctx context.Context, questionID, userID string, retryCount int) 
 		return fmt.Errorf("decode embedding: %w", err)
 	}
 
-	meta, _ := json.Marshal(map[string]string{"user_id": userID, "subject": subject})
 	_, err = s3vClient.PutVectors(ctx, &s3vectors.PutVectorsInput{
 		VectorBucketName: aws.String(vectorBucket),
 		Vectors: []s3vtypes.PutInputVector{
 			{
-				Key:      aws.String(questionID),
-				Data:     &s3vtypes.VectorDataMemberFloat32{Value: resp.Embedding},
-				Metadata: &s3vtypes.DocumentMemberString{Value: string(meta)},
+				Key:  aws.String(questionID),
+				Data: &s3vtypes.VectorDataMemberFloat32{Value: resp.Embedding},
+				Metadata: s3vdoc.NewLazyDocument(map[string]any{
+					"user_id": userID,
+					"subject": subject,
+				}),
 			},
 		},
 	})
@@ -141,29 +124,24 @@ func processJob(ctx context.Context, questionID, userID string, retryCount int) 
 		return fmt.Errorf("put vector: %w", err)
 	}
 
-	updateJobStatus(ctx, questionID, "done", retryCount)
-	slog.Info("embedding job done", "question_id", questionID)
+	slog.Info("embedding stored", "question_id", questionID)
 	return nil
 }
 
-func updateJobStatus(ctx context.Context, questionID, status string, retryCount int) {
+func markEmbedStatus(ctx context.Context, questionID, status string) {
 	_, err := ddbClient.UpdateItem(ctx, &dynamodb.UpdateItemInput{
-		TableName: &embedJobsTable,
+		TableName: aws.String(questionsTable),
 		Key: map[string]types.AttributeValue{
 			"question_id": &types.AttributeValueMemberS{Value: questionID},
-			"sk":          &types.AttributeValueMemberS{Value: "job"},
 		},
-		UpdateExpression: aws.String("SET #s = :s, retry_count = :r"),
-		ExpressionAttributeNames: map[string]string{
-			"#s": "status",
-		},
+		UpdateExpression: aws.String("SET embed_status = :s, updated_at = :t"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":s": &types.AttributeValueMemberS{Value: status},
-			":r": &types.AttributeValueMemberN{Value: fmt.Sprintf("%d", retryCount)},
+			":t": &types.AttributeValueMemberS{Value: time.Now().UTC().Format(time.RFC3339)},
 		},
 	})
 	if err != nil {
-		slog.Error("update job status", "error", err)
+		slog.Error("mark embed status", "question_id", questionID, "error", err)
 	}
 }
 
@@ -197,6 +175,5 @@ func getEnv(key, fallback string) string {
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{})))
-	_ = time.Now() // ensure time import used
 	lambda.Start(handler)
 }

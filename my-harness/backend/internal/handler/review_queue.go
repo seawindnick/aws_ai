@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/workshop/wrong-question/internal/apperr"
@@ -64,6 +65,10 @@ func (h *ReviewQueueHandler) Review(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Action == "" {
 		WriteError(w, apperr.BadRequest("action required: 'approve' or 'reject'"))
+		return
+	}
+	if body.Action == "reject" && strings.TrimSpace(body.Note) == "" {
+		WriteError(w, apperr.BadRequest("note is required when rejecting"))
 		return
 	}
 

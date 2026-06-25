@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime/multipart"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ type QuestionService struct {
 	tagRepo     *repository.TagRepo
 	recognition *RecognitionService
 	embedJobs   *EmbeddingJobService
+	s3vRepo     *repository.S3VectorsRepo
+	reviewRepo  *repository.ReviewRepo
 	imageDir    string
 	cfg         *config.Config
 }
@@ -30,9 +33,20 @@ func NewQuestionService(
 	tagRepo *repository.TagRepo,
 	recognition *RecognitionService,
 	embedJobs *EmbeddingJobService,
+	s3vRepo *repository.S3VectorsRepo,
+	reviewRepo *repository.ReviewRepo,
 	cfg *config.Config,
 ) *QuestionService {
-	return &QuestionService{repo: repo, tagRepo: tagRepo, recognition: recognition, embedJobs: embedJobs, imageDir: cfg.ImageDir, cfg: cfg}
+	return &QuestionService{
+		repo:       repo,
+		tagRepo:    tagRepo,
+		recognition: recognition,
+		embedJobs:  embedJobs,
+		s3vRepo:    s3vRepo,
+		reviewRepo: reviewRepo,
+		imageDir:   cfg.ImageDir,
+		cfg:        cfg,
+	}
 }
 
 // UploadResult 单张图片上传结果。
@@ -135,8 +149,7 @@ func (s *QuestionService) uploadBytes(ctx context.Context, userID string, data [
 	// 异步触发向量生成（写入 embedding_jobs）
 	if s.embedJobs != nil {
 		if err := s.embedJobs.Enqueue(ctx, questionID, userID); err != nil {
-			// 写入失败仅记日志，不阻断主流程
-			fmt.Printf("WARN: enqueue embedding job: %v\n", err)
+			slog.Warn("enqueue embedding job", "question_id", questionID, "error", err)
 		}
 	}
 
@@ -184,12 +197,16 @@ func (s *QuestionService) classifyByConfidence(confidence float64) (model.Questi
 }
 
 // Search 多维搜索（REQ-SEARCH-01 ~ 06）。
-func (s *QuestionService) Search(ctx context.Context, params model.SearchParams) ([]*model.Question, error) {
+// role 为调用者角色；student 强制只可见 approved 题目（REQ-REVIEW-01）。
+func (s *QuestionService) Search(ctx context.Context, params model.SearchParams, role string) ([]*model.Question, error) {
 	if params.Page < 1 {
 		params.Page = 1
 	}
 	if params.PageSize < 1 || params.PageSize > 100 {
 		params.PageSize = 20
+	}
+	if role == string(model.RoleStudent) {
+		params.Status = model.QuestionStatusApproved
 	}
 	questions, err := s.repo.Search(ctx, params)
 	if err != nil {
@@ -198,7 +215,11 @@ func (s *QuestionService) Search(ctx context.Context, params model.SearchParams)
 	return questions, nil
 }
 
-func (s *QuestionService) List(ctx context.Context, userID, subject string, status model.QuestionStatus, page, pageSize int) ([]*model.Question, error) {
+// List 题目列表（REQ-REVIEW-01）。student 强制只可见 approved 题目。
+func (s *QuestionService) List(ctx context.Context, userID, subject string, status model.QuestionStatus, page, pageSize int, role string) ([]*model.Question, error) {
+	if role == string(model.RoleStudent) {
+		status = model.QuestionStatusApproved
+	}
 	questions, err := s.repo.ListByUser(ctx, userID, subject, status, page, pageSize)
 	if err != nil {
 		return nil, fmt.Errorf("list questions: %w", err)
@@ -220,7 +241,7 @@ func (s *QuestionService) Delete(ctx context.Context, id, userID string) error {
 		return fmt.Errorf("get question for delete: %w", err)
 	}
 
-	// cascade: tags, paper_questions, error_records, review_records
+	// cascade MySQL: tags, paper_questions, error_records, review_records
 	if err := s.tagRepo.DeleteByQuestion(ctx, id); err != nil {
 		return fmt.Errorf("cascade delete tags: %w", err)
 	}
@@ -232,9 +253,28 @@ func (s *QuestionService) Delete(ctx context.Context, id, userID string) error {
 		return fmt.Errorf("delete question record: %w", err)
 	}
 
-	// best-effort cleanup of image file
+	// best-effort: DynamoDB review schedule
+	if err := s.reviewRepo.DeleteSchedule(ctx, userID, id); err != nil {
+		slog.Warn("delete review schedule", "question_id", id, "error", err)
+	}
+
+	// best-effort: DynamoDB embedding job
+	if s.embedJobs != nil {
+		if err := s.embedJobs.Delete(ctx, id); err != nil {
+			slog.Warn("delete embedding job", "question_id", id, "error", err)
+		}
+	}
+
+	// best-effort: S3 Vectors
+	if s.s3vRepo != nil {
+		if err := s.s3vRepo.Delete(ctx, id); err != nil {
+			slog.Warn("delete s3 vector", "question_id", id, "error", err)
+		}
+	}
+
+	// best-effort: image file
 	if err := os.Remove(q.ImagePath); err != nil && !os.IsNotExist(err) {
-		fmt.Printf("WARN: delete image file %s: %v\n", q.ImagePath, err)
+		slog.Warn("delete image file", "path", q.ImagePath, "error", err)
 	}
 
 	return nil

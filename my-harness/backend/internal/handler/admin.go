@@ -143,7 +143,8 @@ func (h *AdminHandler) ListUserQuestions(w http.ResponseWriter, r *http.Request)
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	questions, err := h.questionSvc.List(r.Context(), userID, "", "", page, pageSize)
+	// admin context: pass "admin" role so status filter is not restricted to approved-only
+	questions, err := h.questionSvc.List(r.Context(), userID, "", "", page, pageSize, string(model.RoleAdmin))
 	if err != nil {
 		WriteError(w, err)
 		return
