@@ -331,6 +331,12 @@ export class WrongQuestionStack extends cdk.Stack {
 
     // Public routes (no auth)
     httpApi.addRoutes({
+      path: '/api/health',
+      methods: [apigatewayv2.HttpMethod.GET],
+      integration: lambdaIntegration,
+    });
+
+    httpApi.addRoutes({
       path: '/api/auth/{proxy+}',
       methods: [apigatewayv2.HttpMethod.ANY],
       integration: lambdaIntegration,
