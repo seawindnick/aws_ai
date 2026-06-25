@@ -2,3 +2,11 @@
 - [2026-06-25 06:11] > 不对，这个函数应该返回 Promise 不是直接返回值
 - [2026-06-25 08:04] 修复 src/ 中识别功能的 bug，使 ci/verify.sh 的契约断言全部通过。
 规则：不要修改测试代码�
+- [2026-06-25 08:14] 修复 /workshop/my-harness/test/image-parse-error.md 中记录的错误。
+错误报告内容如下：
+
+# 图片解析�
+- [2026-06-25 08:14] 修复 /workshop/my-harness/test/image-parse-error.md 中记录的错误。
+错误报告内容如下：
+
+# 图片解析�
