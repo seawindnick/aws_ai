@@ -1,0 +1,33 @@
+[0;33m[INFO][0m Testing against: https://bqxah1d40h.execute-api.us-east-1.amazonaws.com
+
+════════════════════════════════════════
+ 1. Health check
+════════════════════════════════════════
+[0;31m[FAIL][0m GET /api/health — expected HTTP 200, got 401. Body: {"message":"Unauthorized"}
+[0;31m[FAIL][0m health response has 'status' key — key 'status' missing in: {"message":"Unauthorized"}
+
+════════════════════════════════════════
+ 2. Auth — unauthenticated rejection
+════════════════════════════════════════
+[0;32m[PASS][0m GET /api/questions without token → 401 (HTTP 401)
+[0;32m[PASS][0m GET /api/me without token → 401 (HTTP 401)
+[0;32m[PASS][0m POST /api/questions without token → 401 (HTTP 401)
+
+════════════════════════════════════════
+ 3. Signup
+════════════════════════════════════════
+[0;32m[PASS][0m POST /api/auth/signup user-A (HTTP 201)
+[0;32m[PASS][0m signup response has 'user_id' (found key 'user_id')
+[0;32m[PASS][0m POST /api/auth/signup user-B (HTTP 201)
+[0;32m[PASS][0m POST /api/auth/signup missing password → 400 (HTTP 400)
+[0;32m[PASS][0m POST /api/auth/signup duplicate email → 400 (HTTP 400)
+
+[0;33m[INFO][0m NOTE: Cognito email verification is required before login.
+[0;33m[INFO][0m       Login and authenticated tests are skipped in CI (no real email).
+[0;33m[INFO][0m       To run the full suite, set TOKEN_A and TOKEN_B env vars:
+[0;33m[INFO][0m         TOKEN_A=<id_token_user_a> TOKEN_B=<id_token_user_b> ./ci/verify.sh
+
+════════════════════════════════════════
+ Results
+════════════════════════════════════════
+[0;31m2 test(s) failed.[0m
