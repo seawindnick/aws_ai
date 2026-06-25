@@ -42,7 +42,7 @@ func init() {
 	s3Client = s3.NewFromConfig(cfg)
 
 	questionsTable = mustEnv("DYNAMO_TABLE_QUESTIONS")
-	visionModelID = getEnv("VISION_MODEL_ID", "anthropic.claude-3-5-sonnet-20241022-v2:0")
+	visionModelID = getEnv("VISION_MODEL_ID", "anthropic.claude-haiku-4-5-20251001-v1:0")
 }
 
 // Question stored in DynamoDB
