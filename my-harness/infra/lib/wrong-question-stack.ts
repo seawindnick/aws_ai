@@ -351,7 +351,7 @@ export class WrongQuestionStack extends cdk.Stack {
     });
 
     // ─── Outputs ──────────────────────────────────────────────────────────────
-    new cdk.CfnOutput(this, 'ApiEndpoint', {
+    new cdk.CfnOutput(this, 'ApiUrl', {
       value: httpApi.apiEndpoint,
       description: 'API Gateway endpoint URL',
     });
