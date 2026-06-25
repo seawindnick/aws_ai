@@ -23,3 +23,6 @@ infra/cdk.context.json
 
 # OS
 .DS_Store
+
+# Claude settings (local only)
+.claude/settings.json
