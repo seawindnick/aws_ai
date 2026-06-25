@@ -156,7 +156,7 @@ export class WrongQuestionStack extends cdk.Stack {
       logGroup: analyzerLogGroup,
       environment: {
         DYNAMO_TABLE_QUESTIONS: questionsTable.tableName,
-        VISION_MODEL_ID: 'anthropic.claude-haiku-4-5-20251001-v1:0',
+        VISION_MODEL_ID: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
       },
     });
 
